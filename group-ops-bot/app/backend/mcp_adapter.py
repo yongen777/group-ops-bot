@@ -289,12 +289,14 @@ class McpSseAdapter(Backend):
 
     def checkin_submit(self, *, user_id, group_id, period_key, session,
                        image_ref, image_meta=None, request_id,
-                       status="NORMAL", entry_source="user") -> dict:
+                       status="NORMAL", entry_source="user",
+                       checkin_time=None) -> dict:
         return self._call_tool("checkin.submit", {
             "user_id": user_id, "group_id": group_id,
             "period_key": period_key, "session": session,
             "image_ref": image_ref, "image_meta": image_meta,
             "status": status, "entry_source": entry_source,
+            "checkin_time": checkin_time,
             "request_id": request_id})
 
     def checkin_query_status(self, *, user_id, group_id, period_key,

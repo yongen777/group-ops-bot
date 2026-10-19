@@ -47,7 +47,8 @@ class Backend(ABC):
                        session: str, image_ref: str,
                        image_meta: Optional[dict], request_id: str,
                        status: str = "NORMAL",
-                       entry_source: str = "user") -> dict:
+                       entry_source: str = "user",
+                       checkin_time: Optional[str] = None) -> dict:
         """checkin.submit。返回 {status, record_id, duplicate, message}。
 
         status: NORMAL/LATE/ADMIN_EDIT（机器人侧按截止与来源计算，MCP 只存）；

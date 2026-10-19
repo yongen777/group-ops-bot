@@ -133,9 +133,12 @@ def records_to_rows(biz: str, records: list, period_type: str = "") -> tuple:
     return headers, rows
 
 
-def to_csv(biz: str, records: list, period_type: str = "") -> str:
-    """CSV 文本（带 BOM）。"""
-    headers, rows = records_to_rows(biz, records, period_type)
+def rows_to_csv(headers: list, rows: list) -> str:
+    """任意表头/数据行 -> CSV 文本（带 BOM）。
+
+    2026-10-19 抽出：单业务导出与「全天全部业务」单表共用同一实现，
+    ⛔ 不各写一套（否则列序与 BOM 迟早分叉）。
+    """
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(headers)
@@ -143,18 +146,39 @@ def to_csv(biz: str, records: list, period_type: str = "") -> str:
     return "\ufeff" + buffer.getvalue()
 
 
-def to_xlsx(biz: str, records: list, period_type: str = "") -> bytes:
-    """XLSX 字节流。"""
-    headers, rows = records_to_rows(biz, records, period_type)
+def multi_sheet_xlsx(sheets: list) -> bytes:
+    """多工作表工作簿。
+
+    sheets: [(工作表名, 表头, 数据行), ...]；工作表顺序即传入顺序。
+    """
     workbook = Workbook()
-    ws = workbook.active
-    ws.title = BIZ_LABEL[biz]
-    ws.append(headers)
-    for row in rows:
-        ws.append(row)
+    workbook.remove(workbook.active)  # 去掉默认空白表，避免多出一张
+    for name, headers, rows in sheets:
+        ws = workbook.create_sheet(title=str(name)[:31])
+        ws.append(list(headers))
+        for row in rows:
+            ws.append(list(row))
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def safe_name(text: str, limit: int = 40) -> str:
+    """文件名安全化（只替换非法字符，不改中文）。"""
+    return "".join(ch if ch not in '\\/:*?"<>|' else "_"
+                   for ch in (text or "群"))[:limit]
+
+
+def to_csv(biz: str, records: list, period_type: str = "") -> str:
+    """CSV 文本（带 BOM）。"""
+    headers, rows = records_to_rows(biz, records, period_type)
+    return rows_to_csv(headers, rows)
+
+
+def to_xlsx(biz: str, records: list, period_type: str = "") -> bytes:
+    """XLSX 字节流。"""
+    headers, rows = records_to_rows(biz, records, period_type)
+    return multi_sheet_xlsx([(BIZ_LABEL[biz], headers, rows)])
 
 
 def build_stats(state: StateStore, backend: Backend, group_id: str, biz: str,
@@ -258,6 +282,11 @@ def build_stats(state: StateStore, backend: Backend, group_id: str, biz: str,
 def export_filename(group_name: str, biz: str, period_key: str,
                     fmt: str) -> str:
     """下载文件名（中文，RFC 5987 编码由调用方拼接头）。"""
-    safe = "".join(ch if ch not in '\\/:*?"<>|' else "_"
-                   for ch in (group_name or "群"))[:40]
-    return "%s%s_%s.%s" % (BIZ_LABEL[biz], safe, period_key, fmt)
+    return "%s%s_%s.%s" % (BIZ_LABEL[biz], safe_name(group_name), period_key,
+                           fmt)
+
+
+def all_export_filename(group_name: str, date_str: str, fmt: str) -> str:
+    """全业务单表 / 工作簿的文件名。"""
+    return "全天全部业务执行清单_%s_%s.%s" % (safe_name(group_name),
+                                              date_str, fmt)

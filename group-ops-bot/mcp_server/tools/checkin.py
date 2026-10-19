@@ -21,11 +21,14 @@ def handle_submit(writer, *, user_id: int, group_id: str, period_key: str,
                   session: str, image_ref: str,
                   image_meta: Optional[dict], request_id: str,
                   status: str = "NORMAL",
-                  entry_source: str = "user") -> dict:
+                  entry_source: str = "user",
+                  checkin_time: Optional[str] = None) -> dict:
     """checkin.submit（§4.11.1）。image_meta: {name, size} 可空。
 
     status: NORMAL/LATE/ADMIN_EDIT；entry_source: user/admin —— 均由机器人侧
     计算（§4.11.0：MCP Server 只存不校验），此处只落库。
+    checkin_time：管理员补录可指定打卡时间（YYYY-MM-DD HH:MM:SS）；
+    ⛔ 普通提交不传，服务端记 NOW(3)。
     """
     meta = image_meta or {}
 
@@ -33,7 +36,8 @@ def handle_submit(writer, *, user_id: int, group_id: str, period_key: str,
         record_id = dao.insert_checkin(
             cur, user_id, group_id, period_key, session, image_ref,
             meta.get("name"), meta.get("size"), request_id,
-            status=status, entry_source=entry_source)
+            status=status, entry_source=entry_source,
+            checkin_time=checkin_time)
         return record_id, {"session": session}
 
     payload = {
@@ -41,7 +45,7 @@ def handle_submit(writer, *, user_id: int, group_id: str, period_key: str,
         "session": session, "image_ref": image_ref,
         "image_name": meta.get("name"), "image_size": meta.get("size"),
         "status": status, "entry_source": entry_source,
-        "request_id": request_id,
+        "request_id": request_id, "checkin_time": checkin_time,
     }
     return writer.execute(
         tool_name=TOOL_SUBMIT, biz_type="checkin", group_id=group_id,
@@ -70,15 +74,18 @@ def register(mcp, writer) -> None:
     def checkin_submit(user_id: int, group_id: str, period_key: str, session: str,
                        image_ref: str, image_meta: dict | None = None,
                        request_id: str = "", status: str = "NORMAL",
-                       entry_source: str = "user") -> dict:
+                       entry_source: str = "user",
+                       checkin_time: str | None = None) -> dict:
         """提交一次打卡。session 为 am/pm（机器人侧按服务端时间判定）。
         image_meta 为 {name, size}。status/entry_source 由机器人侧计算。
+        checkin_time 仅管理员补录可指定（YYYY-MM-DD HH:MM:SS），普通提交留空。
         同 request_id 重放返回原结果。"""
         return handle_submit(writer, user_id=user_id, group_id=group_id,
                              period_key=period_key, session=session,
                              image_ref=image_ref, image_meta=image_meta,
                              request_id=request_id, status=status,
-                             entry_source=entry_source)
+                             entry_source=entry_source,
+                             checkin_time=checkin_time)
 
     @mcp.tool(name="checkin.query_status")
     def checkin_query_status(user_id: int, group_id: str, period_key: str,

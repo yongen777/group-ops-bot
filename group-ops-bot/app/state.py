@@ -1091,6 +1091,29 @@ class StateStore:
             (group_id, user_id))
         self._conn.commit()
 
+    def delete_group_cascade(self, group_id: str) -> dict:
+        """彻底移除群接入（2026-10-19 用户指令「移除群聊」）。
+
+        一次事务删净：机器人实例、群配置、应交名单、导出授权、报数字段池，
+        并清理该群的调度残留（待办会话 / 提醒计划 / 未消费令牌 / 幂等意图），
+        避免移除后仍出现僵尸推送或残留授权。
+
+        ⛔ MySQL 侧历史业务记录不动（本方法只动机器人侧 SQLite）；
+        ⛔ group_seen 保留 —— 群里再 @ 机器人时 T0 会重新登记 WAIT_BIND，
+        满足「移除后重新接入」的语义。
+        """
+        counts: dict = {}
+        tables = ("export_whitelist", "report_field_pool",
+                  "group_member_task_config", "reminder_plan",
+                  "pending_session", "tokens", "submit_intent",
+                  "qmx_robot_instance", "group_config")
+        with self._conn:
+            for table in tables:
+                cur = self._conn.execute(
+                    "DELETE FROM %s WHERE group_id=?" % table, (group_id,))
+                counts[table] = cur.rowcount
+        return counts
+
     def list_member_tasks(self, group_id: str,
                           enabled_only: bool = False) -> Iterable[sqlite3.Row]:
         sql = "SELECT * FROM group_member_task_config WHERE group_id=?"

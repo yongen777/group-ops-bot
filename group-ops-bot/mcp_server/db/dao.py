@@ -82,15 +82,18 @@ class Dao:
                        session: str, image_ref: str, image_name: Optional[str],
                        image_size: Optional[int], request_id: str,
                        status: str = "NORMAL",
-                       entry_source: str = "user") -> int:
+                       entry_source: str = "user",
+                       checkin_time: Optional[str] = None) -> int:
+        # checkin_time：管理员补录可指定（YYYY-MM-DD HH:MM:SS）；不传 = NOW(3)
         cur.execute(
             "INSERT INTO %s (user_id, group_id, period_key, session, checkin_time,"
             " image_ref, image_name, image_size, status, entry_source,"
             " request_id, created_time)"
-            " VALUES (%%s, %%s, %%s, %%s, NOW(3), %%s, %%s, %%s, %%s, %%s, %%s, NOW(3))"
+            " VALUES (%%s, %%s, %%s, %%s, COALESCE(%%s, NOW(3)), %%s, %%s,"
+            " %%s, %%s, %%s, %%s, NOW(3))"
             % T_CHECKIN,
-            (user_id, group_id, period_key, session, image_ref, image_name,
-             image_size, status, entry_source, request_id))
+            (user_id, group_id, period_key, session, checkin_time, image_ref,
+             image_name, image_size, status, entry_source, request_id))
         return int(cur.lastrowid)
 
     def query_checkin_status(self, cur, user_id: int, group_id: str,

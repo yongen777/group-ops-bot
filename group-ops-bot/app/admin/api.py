@@ -26,6 +26,7 @@ from ..backend.base import Backend
 from ..config import BotConfig
 from ..state import StateStore
 from . import auth
+from . import board as board_mod
 from . import stats_export as stats_mod
 
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -44,6 +45,65 @@ def _validate_hhmm(value, field: str) -> str:
         raise HTTPException(status_code=400,
                             detail="%s 必须是 HH:MM 格式" % field)
     return value
+
+
+def _normalize_clock(value, date_str: str) -> Optional[str]:
+    """补录时间 -> "YYYY-MM-DD HH:MM:SS"（MySQL DATETIME 口径）。
+
+    前端只提供 HH:MM（可带秒），日期取管理员选的补录日期；
+    空值 / 未提供 -> None，由服务端记 NOW(3)（等价旧行为）。
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "T" in text:
+        text = text.split("T", 1)[1]
+    text = text.split("+", 1)[0].split("Z", 1)[0]
+    parts = text.split(":")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+        second = int(float(parts[2])) if len(parts) > 2 else 0
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400,
+                            detail="补录时间格式不正确，请填写 HH:MM")
+    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+        raise HTTPException(status_code=400,
+                            detail="补录时间格式不正确，请填写 HH:MM")
+    return "%s %02d:%02d:%02d" % (date_str, hour, minute, second)
+
+
+def _resolve_period_from_body(group_id: str, body: dict, biz: str) -> str:
+    """请求体 -> 周期键（2026-10-19：补录改按「日期」提交）。
+
+    优先 date（YYYY-MM-DD）；兼容旧调用方的 period_key。
+    总结按群配置的周期类型折算（日报=当天，周报=所在 ISO 周）。
+    """
+    date_str = body.get("date")
+    if isinstance(date_str, str) and date_str.strip():
+        date_str = date_str.strip()
+        try:
+            return stats_mod.resolve_period_key(state, group_id, biz, date_str)
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail="日期格式不正确，请选择有效日期")
+    legacy = body.get("period_key")
+    if isinstance(legacy, str) and legacy.strip():
+        return legacy.strip()
+    raise HTTPException(status_code=400, detail="补录日期不能为空")
+
+
+def _body_date(body: dict) -> str:
+    """请求体里的业务日期（补录时间需要拼 YYYY-MM-DD HH:MM:SS）。"""
+    date_str = body.get("date")
+    if isinstance(date_str, str) and date_str.strip():
+        return date_str.strip()
+    legacy = body.get("period_key")
+    if isinstance(legacy, str) and legacy.strip():
+        return legacy.strip()
+    raise HTTPException(status_code=400, detail="补录日期不能为空")
 
 
 def _clean_str(value, field: str, max_len: int, required: bool = True
@@ -738,7 +798,7 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_csrf(request, identity)
         _group_row(state, group_id)
         user_id = _clean_str(body.get("user_id"), "用户标识", 32)
-        period_key = _clean_str(body.get("period_key"), "周期", 16)
+        period_key = _resolve_period_from_body(group_id, body, "checkin")
         session = body.get("session")
         # 多时间段后：session 必须是本群已配置的区间 id（⛔ 不再是固定 am/pm）
         from ..handlers import checkin as checkin_handler
@@ -748,12 +808,15 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                 status_code=400,
                 detail="时段必须是本群已配置的时间段标识（见群配置）")
         status = body.get("status", "ADMIN_EDIT")
+        # 补录时间：管理员可指定（HH:MM[:SS]）+ 补录日期；不指定则由服务端记实际时刻
+        checkin_time = _normalize_clock(body.get("checkin_time"),
+                                        _body_date(body))
         result = checkin_handler.admin_backfill(ctx, period_key, session,
-                                                status)
+                                                status, checkin_time)
         _audit(state, request, identity, "backfill.checkin", "checkin",
                "%s/%s/%s" % (group_id, user_id, period_key),
                {"session": session, "status": status,
-                "kind": result.kind})
+                "checkin_time": checkin_time, "kind": result.kind})
         if result.kind != "A":
             raise HTTPException(status_code=409,
                                 detail=result.message or "补录被拒绝")
@@ -768,11 +831,22 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_csrf(request, identity)
         _group_row(state, group_id)
         user_id = _clean_str(body.get("user_id"), "用户标识", 32)
-        period_key = _clean_str(body.get("period_key"), "周期", 16)
         period_type = body.get("period_type")
         if period_type not in ("daily", "weekly"):
             raise HTTPException(status_code=400,
                                 detail="周期类型必须是 daily / weekly")
+        # 2026-10-19：按日期补录；周期键按管理员选的日报/周报折算
+        date_str = body.get("date")
+        if isinstance(date_str, str) and date_str.strip():
+            from ..period import parse_daily_key, period_key as _pk
+            try:
+                period_key = _pk(period_type,
+                                 parse_daily_key(date_str.strip()))
+            except ValueError:
+                raise HTTPException(status_code=400,
+                                    detail="日期格式不正确，请选择有效日期")
+        else:
+            period_key = _clean_str(body.get("period_key"), "周期", 16)
         content = _clean_str(body.get("content"), "总结内容", 10000)
         from ..handlers import summary as summary_handler
         ctx = _backfill_ctx(group_id, user_id)
@@ -795,7 +869,7 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_csrf(request, identity)
         _group_row(state, group_id)
         user_id = _clean_str(body.get("user_id"), "用户标识", 32)
-        period_key = _clean_str(body.get("period_key"), "周期", 16)
+        period_key = _resolve_period_from_body(group_id, body, "report")
         role = body.get("role")
         if not isinstance(role, str) or not role.strip():
             raise HTTPException(status_code=400, detail="角色不能为空")
@@ -877,22 +951,93 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_password_changed(identity)
         return build_dashboard(state, backend, group_id=group_id)
 
+    # ---------- 成员级业务看板（2026-10-19：一天 × 全员 × 三业务） ----------
+
+    @router.get("/groups/{group_id}/board")
+    def group_board(group_id: str, request: Request,
+                    date: Optional[str] = None):
+        """群看板（纯读）。date 缺省 = 今天；格式错 400，群不存在 404。"""
+        identity = _identity(request, state)
+        _require_password_changed(identity)
+        if state.get_group_config(group_id) is None:
+            raise HTTPException(status_code=404, detail="群不存在")
+        from ..period import daily_key, parse_daily_key
+        date_str = (date or "").strip() or daily_key()
+        try:
+            parse_daily_key(date_str)
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail="日期格式不正确，请选择有效日期")
+        return board_mod.build_board(state, backend, group_id, date_str)
+
     # ---------- 统计导出（D3-C：CSV / XLSX 下载；纯读，查询失败不出空文件） ----------
 
     @router.get("/stats/export")
-    def stats_export(request: Request, group_id: str, biz: str, date: str,
-                     format: str = "csv"):
+    def stats_export(request: Request, group_id: str, date: str,
+                     biz: Optional[str] = None, scope: str = "single",
+                     format: str = "csv", remark: Optional[str] = None):
+        """统计导出。
+
+        2026-10-19（照参考后台 1:1）：新增 scope=all —— 一天 × 全员 × 三业务
+        的单表 CSV / 三工作表 XLSX；scope=single 保留原单业务口径（⛔ 旧入口
+        不破坏）。remark 只落审计，⛔ 不进文件内容。
+        """
         identity = _identity(request, state)
         _require_password_changed(identity)
-        if biz not in ("checkin", "summary", "report"):
-            raise HTTPException(status_code=400,
-                                detail="请选择要导出的业务")
+        if scope not in ("single", "all"):
+            raise HTTPException(status_code=400, detail="导出范围不正确")
         if format not in ("csv", "xlsx"):
             raise HTTPException(status_code=400,
                                 detail="下载格式不支持，请选择表格或工作簿")
         row = state.get_group_config(group_id)
         if row is None:
             raise HTTPException(status_code=404, detail="群不存在")
+        group_name = (row["group_name"] if "group_name" in row.keys()
+                      else group_id)
+        period_type = (row["period_type"] if "period_type" in row.keys()
+                       else "daily")
+        media_xlsx = ("application/vnd.openxmlformats-officedocument"
+                      ".spreadsheetml.sheet")
+
+        if scope == "all":
+            from ..period import parse_daily_key
+            try:
+                parse_daily_key(date)
+            except ValueError:
+                raise HTTPException(status_code=400,
+                                    detail="日期格式不正确，请选择有效日期")
+            board = board_mod.build_board(state, backend, group_id, date)
+            if any(board.get("unknown", {}).values()):
+                # ⛔ 不出半张空表冒充成功：查不到就明确说稍后重试
+                raise HTTPException(status_code=503,
+                                    detail="数据暂时查不到，请稍后重试")
+            if format == "csv":
+                headers, rows = board_mod.board_rows(board)
+                content = stats_mod.rows_to_csv(headers, rows).encode("utf-8")
+                media = "text/csv; charset=utf-8"
+            else:
+                sheets = []
+                for biz_key in ("checkin", "summary", "report"):
+                    pkey = board["period_keys"][biz_key]
+                    records = stats_mod.query_records(backend, biz_key,
+                                                      group_id, pkey)
+                    headers, rows = stats_mod.records_to_rows(
+                        biz_key, records, period_type)
+                    sheets.append((stats_mod.BIZ_LABEL[biz_key], headers,
+                                   rows))
+                content = stats_mod.multi_sheet_xlsx(sheets)
+                media = media_xlsx
+            filename = stats_mod.all_export_filename(group_name, date, format)
+            _audit(state, request, identity, "stats.export", "group",
+                   group_id, {"scope": "all", "format": format,
+                              "date": date, "remark": remark})
+            return Response(content=content, media_type=media, headers={
+                "Content-Disposition":
+                    "attachment; filename*=UTF-8''%s" % quote(filename)})
+
+        if biz not in ("checkin", "summary", "report"):
+            raise HTTPException(status_code=400,
+                                detail="请选择要导出的业务")
         try:
             period_k = stats_mod.resolve_period_key(state, group_id, biz,
                                                     date)
@@ -905,10 +1050,6 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         except Exception:
             raise HTTPException(status_code=503,
                                 detail="数据暂时查不到，请稍后重试")
-        group_name = (row["group_name"] if "group_name" in row.keys()
-                      else group_id)
-        period_type = (row["period_type"] if "period_type" in row.keys()
-                       else "daily")
         filename = stats_mod.export_filename(group_name, biz, period_k,
                                              format)
         if format == "csv":
@@ -917,8 +1058,10 @@ def create_admin_router(*, state: StateStore, backend: Backend,
             media = "text/csv; charset=utf-8"
         else:
             content = stats_mod.to_xlsx(biz, records, period_type)
-            media = ("application/vnd.openxmlformats-officedocument"
-                     ".spreadsheetml.sheet")
+            media = media_xlsx
+        _audit(state, request, identity, "stats.export", "group", group_id,
+               {"scope": "single", "biz": biz, "format": format,
+                "date": date, "remark": remark})
         return Response(content=content, media_type=media, headers={
             "Content-Disposition":
                 "attachment; filename*=UTF-8''%s" % quote(filename)
@@ -1051,6 +1194,25 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                "robot_instance", group_id, None)
         return {"ok": True, "instance": _instance_payload(
             state.get_robot_instance(group_id))}
+
+    @router.delete("/robot-instances/{group_id}")
+    def remove_robot_instance(group_id: str, request: Request = None):
+        """移除群聊（2026-10-19 新增，照参考后台）。
+
+        语义（用户当面选定）：实例 + 群配置 + 应交名单 + 导出授权 +
+        报数字段池 **全删**；MySQL 侧业务历史记录 ⛔ 不动（历史可查）。
+        group_seen 保留 —— 群里再 @ 一次可按 WAIT_BIND 重新接入。
+        幂等口径：群不存在返回 404（⛔ 不伪装成功）。
+        """
+        identity = _identity(request, state)
+        _require_password_changed(identity)
+        _require_csrf(request, identity)
+        if state.get_group_config(group_id) is None:
+            raise HTTPException(status_code=404, detail="群聊不存在或已移除")
+        removed = state.delete_group_cascade(group_id)
+        _audit(state, request, identity, "robot_instance.remove",
+               "robot_instance", group_id, removed)
+        return {"ok": True, "message": "群聊已移除", "removed": removed}
 
     return router
 

@@ -517,13 +517,17 @@ def token_info(ctx: HandlerContext, value: str) -> dict:
 # ---------- 管理后台补录（用户指令第二阶段：允许管理员后台补录） ----------
 
 def admin_backfill(ctx: HandlerContext, period_key: str, session: str,
-                   status: str = STATUS_ADMIN_EDIT) -> SubmitResult:
+                   status: str = STATUS_ADMIN_EDIT,
+                   checkin_time: Optional[str] = None) -> SubmitResult:
     """后台补录打卡（ctx.phone = 目标用户）。
 
     - entry_source=admin；status 由管理员选择（默认 ADMIN_EDIT）
     - ⛔ 不检查截止（补录的本质就是补截止后的账）
     - ✅ 仍遵守额度：同范围已成功 -> B（⛔ 不覆盖已有记录）
     - session 必须是本群已配置的区间 id（多时间段后不再是固定 am/pm）
+    - checkin_time（2026-10-19 新增）：管理员指定的补录时间 HH:MM[:SS]，
+      ⛔ 不传则由服务端记录实际补录时刻（等价旧行为）；传值只用于「管理员
+      操作补录时间」留痕，不改额度判定
     - ⚠️ 调用方（admin API）负责鉴权与审计；本函数只做业务管线
     """
     slot = slot_by_id(ctx, session)
@@ -535,12 +539,17 @@ def admin_backfill(ctx: HandlerContext, period_key: str, session: str,
     if ctx.state.has_successful_scope(scope):
         return SubmitResult(KIND_B, "该用户本时段已有打卡记录，不能重复补录")
 
+    extra = {}
+    if checkin_time:
+        extra["checkin_time"] = checkin_time
+
     def call(request_id: str) -> dict:
         user_id = ensure_user_id(ctx)
         return ctx.backend.checkin_submit(
             user_id=user_id, group_id=ctx.group_id, period_key=period_key,
             session=slot["id"], image_ref="", image_meta=None,
-            status=status, entry_source=ENTRY_ADMIN, request_id=request_id)
+            status=status, entry_source=ENTRY_ADMIN, request_id=request_id,
+            **extra)
 
     result = run_submission(
         ctx, biz=BIZ, call=call, period_key=period_key, session=slot["id"],

@@ -112,18 +112,21 @@ class TestDynamicAddUi:
         assert "字段加载中" in tpl      # 占位存在（由 JS 在终态替换）
 
     def test_admin_fields_page_has_no_role_config(self):
-        """后台字段池：⛔ 不再有「适用角色」配置（全局共享）。"""
+        """后台字段池（React SPA）：⛔ 不再有「适用角色」配置（全局共享）。"""
         import app
-        tpl = (Path(app.__file__).parent / "admin" / "templates" /
-               "group_fields.html").read_text(encoding="utf-8")
-        assert "适用角色" not in tpl
-        assert "fd-roles" not in tpl
+        src = (Path(app.__file__).parent.parent / "admin-ui" / "src" /
+               "components" / "system" / "GroupManagement.tsx"
+               ).read_text(encoding="utf-8")
+        assert "适用角色" not in src
+        assert "fd-roles" not in src
 
-    def test_admin_js_no_longer_sends_roles(self):
+    def test_admin_ui_no_longer_sends_roles(self):
         import app
-        js = (Path(app.__file__).parent / "admin" / "static" / "js" /
-              "admin-pages.js").read_text(encoding="utf-8")
-        assert "fd-roles" not in js
+        src = (Path(app.__file__).parent.parent / "admin-ui" / "src" /
+               "components" / "system" / "GroupManagement.tsx"
+               ).read_text(encoding="utf-8")
+        assert "roles" not in src  # 字段池新增只送 名称 / 单位
+        assert "field_name" in src
 
 
 # ---------- 三、成功后群内 @ 通知 ----------
