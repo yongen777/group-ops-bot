@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>打卡</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #f6f6f6; color: #222; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 14px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .row { display: flex; justify-content: space-between; padding: 8px 0;
+         font-size: 14px; border-bottom: 1px solid #f0f0f0; }
+  .row:last-child { border-bottom: none; }
+  .row .k { color: #888; }
+  .btn-row { display: flex; gap: 10px; margin-top: 10px; }
+  button { flex: 1; padding: 12px; border: none; border-radius: 10px;
+           font-size: 15px; }
+  .primary { width: 100%; background: #1a73e8; color: #fff; margin-top: 10px; }
+  .ghost { background: #ececec; color: #333; }
+  button:disabled { opacity: .5; }
+  #status { font-size: 14px; line-height: 1.6; margin-top: 14px; white-space: pre-wrap; }
+  .ok { color: #137333; }
+  .warn { color: #b06000; }
+  .err { color: #c5221f; }
+  .hidden { display: none; }
+  #expireHint { font-size: 13px; color: #b06000; margin-top: 10px; }
+  #expireHint.expired { color: #c5221f; font-weight: 600; }
+  .file-name { font-size: 13px; color: #555; margin-top: 8px; word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>拍照打卡</h1>
+  <div class="sub">链接含一次性凭证，请勿转发</div>
+
+  <div class="card">
+    <div class="row"><span class="k">时段</span><span id="session">—</span></div>
+    <div class="row"><span class="k">日期</span><span id="period">—</span></div>
+    <div class="row"><span class="k">状态</span><span id="state">加载中…</span></div>
+  </div>
+
+  <div class="card" id="uploadCard">
+    <div class="sub" style="margin:0 0 4px">上传打卡图片（支持拍照或从图库选择）</div>
+    <div class="btn-row">
+      <button class="ghost" id="cameraBtn" type="button">拍照上传</button>
+      <button class="ghost" id="galleryBtn" type="button">从图库选择</button>
+    </div>
+    <!-- 两个隐藏入口：camera 带 capture 直接唤起相机；gallery 不带 capture
+         走系统选择器（iOS 会出现「拍照 / 相册」选择面板，Android 为文件选择器） -->
+    <input type="file" id="fileCamera" accept="image/*" capture="environment" class="hidden">
+    <input type="file" id="fileGallery" accept="image/*" class="hidden">
+    <div class="file-name" id="fileName"></div>
+    <div class="sub" id="uploadHint" style="margin:8px 0 0">支持 JPG / PNG / WebP，单张不超过 10MB</div>
+    <div id="expireHint"></div>
+  </div>
+
+  <button class="primary" id="submitBtn" type="button" disabled>提交打卡</button>
+  <div id="status"></div>
+</div>
+
+<script>
+(function () {
+  var hash = (location.hash || "").replace(/^#/, "");
+  var params = {};
+  hash.split("&").forEach(function (kv) {
+    if (!kv) return;
+    var i = kv.indexOf("=");
+    var k = i > 0 ? kv.slice(0, i) : kv;
+    var v = i > 0 ? decodeURIComponent(kv.slice(i + 1)) : "";
+    if (k === "t") params[k] = v;
+  });
+  var token = params.t || "";
+  var imageRef = "";
+  var expiresAt = null;   // Date 对象；链接过期时刻（服务端口径）
+  var expired = false;
+  var countdownTimer = null;
+
+  function $(id) { return document.getElementById(id); }
+  function say(text, cls) {
+    var el = $("status");
+    el.textContent = text;
+    el.className = cls || "";
+  }
+  function post(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); });
+  }
+  function fmtTime(d) {
+    var hh = ("0" + d.getHours()).slice(-2);
+    var mm = ("0" + d.getMinutes()).slice(-2);
+    return hh + ":" + mm;
+  }
+  function setExpired() {
+    if (expired) { return; }
+    expired = true;
+    $("expireHint").textContent = "链接已过期，请返回群聊重新发送「打卡」获取新链接";
+    $("expireHint").className = "expired";
+    $("cameraBtn").disabled = true;
+    $("galleryBtn").disabled = true;
+    $("submitBtn").disabled = true;
+    if (countdownTimer) { clearInterval(countdownTimer); }
+  }
+  function tickCountdown() {
+    if (!expiresAt) { return; }
+    var leftMs = expiresAt.getTime() - Date.now();
+    if (leftMs <= 0) { setExpired(); return; }
+    var mins = Math.ceil(leftMs / 60000);
+    $("expireHint").textContent =
+      "链接有效期至 " + fmtTime(expiresAt) + "（剩余约 " + mins + " 分钟，逾期失效）";
+  }
+
+  if (!token) {
+    say("链接缺少凭证，请返回群聊重新发送「打卡」。", "err");
+    $("state").textContent = "无效链接";
+    setExpired();
+    return;
+  }
+
+  post("/api/h5/checkin/info", { token: token }).then(function (data) {
+    if (!data.ok) {
+      $("state").textContent = "链接不可用";
+      say(data.message || "链接无效或已被作废，请重新发送「打卡」。", "err");
+      setExpired();
+      return;
+    }
+    $("session").textContent = data.session_label || data.session;
+    $("period").textContent = data.period_key;
+    if (data.expires_at) {
+      expiresAt = new Date(data.expires_at);
+      tickCountdown();
+      countdownTimer = setInterval(tickCountdown, 30000);
+    }
+    if (data.done) {
+      $("state").textContent = "本时段已完成";
+      say("本时段打卡已完成，无需重复提交。", "ok");
+      setExpired();
+      return;
+    }
+    $("state").textContent = "待打卡";
+  }).catch(function () {
+    say("网络异常，请稍后重试。", "err");
+  });
+
+  function uploadFile(inputId) {
+    if (expired) { say("链接已过期，请重新发送「打卡」获取新链接。", "err"); return; }
+    var file = $(inputId).files[0];
+    if (!file) { return; }
+    $("fileName").textContent = "已选择：" + file.name;
+    say("正在上传…", "");
+    var form = new FormData();
+    form.append("token", token);
+    form.append("file", file);
+    fetch("/api/h5/checkin/upload", { method: "POST", body: form })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.ok && data.image_ref) {
+          imageRef = data.image_ref;
+          $("submitBtn").disabled = false;
+          say("图片已上传，可以提交。", "ok");
+        } else {
+          say(data.message || "上传失败，请重试。", "warn");
+        }
+      })
+      .catch(function () { say("上传失败，请稍后重试。", "err"); });
+  }
+
+  $("cameraBtn").addEventListener("click", function () {
+    $("fileCamera").value = "";
+    $("fileCamera").click();
+  });
+  $("galleryBtn").addEventListener("click", function () {
+    $("fileGallery").value = "";
+    $("fileGallery").click();
+  });
+  $("fileCamera").addEventListener("change", function () {
+    uploadFile("fileCamera");
+  });
+  $("fileGallery").addEventListener("change", function () {
+    uploadFile("fileGallery");
+  });
+
+  $("submitBtn").addEventListener("click", function () {
+    if (!imageRef) { say("请先上传打卡图片。", "warn"); return; }
+    say("正在提交…", "");
+    post("/api/h5/checkin/submit", { token: token, image_ref: imageRef })
+      .then(function (data) {
+        say(data.message || "", data.ok ? "ok" : (data.kind === "C" ? "warn" : "err"));
+        if (data.ok) { $("submitBtn").disabled = true; $("state").textContent = "已完成"; }
+      })
+      .catch(function () { say("提交失败，请稍后重试。", "err"); });
+  });
+})();
+</script>
+</body>
+</html>

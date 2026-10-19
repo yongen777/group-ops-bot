@@ -1,0 +1,124 @@
+{% extends "layout.html" %}
+{% block body_attrs %} data-page="group-backfill" data-group-id="{{ group.group_id|urlencode }}"{% endblock %}
+{% block title %}后台补录{% endblock %}
+{% block pretitle %}业务配置{% endblock %}
+{% block heading %}{{ tab_label }}{% endblock %}
+{% block crumb %}{{ group.group_name }} · 后台补录{% endblock %}
+{% block content %}
+<div class="alert alert-info" role="alert">
+  <div class="d-flex">
+    <div><i class="ti ti-info-circle me-2"></i></div>
+    <div>当前群：<b>{{ group.group_name }}</b>（<span class="mono">{{ group.group_id }}</span>）。
+      总结 / 报数为整天执行（⛔ 不再有截止时间），此处用于<strong>补历史周期的账</strong>
+      （entry_source=admin 留痕）。</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3 class="card-title">手动提醒</h3></div>
+  <div class="card-body">
+    <p class="text-muted">对该群执行一轮提醒（应交名单 − 已完成，含 C 类挂起排除与 5 分钟冷却；推送端口未接通时如实记未发送）。
+      按业务单独提醒请到「群配置 → 提醒规则」行内的「立即提醒」。</p>
+    <button class="btn btn-primary" id="rm-run-btn" type="button">立即提醒（全部业务）</button>
+    <span class="msg ms-2" id="rm-msg"></span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3 class="card-title">补录打卡</h3></div>
+  <div class="card-body">
+    <div class="row">
+      <div class="col-md-3">
+        <label class="form-label" for="bf-user">用户标识（手机号）</label>
+        <input type="text" class="form-control mono" id="bf-user" maxlength="32" placeholder="22644212509">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="bf-period">日期（YYYY-MM-DD）</label>
+        <input type="text" class="form-control mono" id="bf-period" maxlength="16" placeholder="2026-10-13">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="bf-session">时段</label>
+        <select class="form-select" id="bf-session">
+          <option value="">（加载中…）</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="bf-status">状态</label>
+        <select class="form-select" id="bf-status">
+          <option value="ADMIN_EDIT">ADMIN_EDIT（后台补录）</option>
+          <option value="NORMAL">NORMAL（按时）</option>
+          <option value="LATE">LATE（迟到）</option>
+        </select>
+      </div>
+    </div>
+    <div class="mt-3">
+      <button class="btn btn-primary" id="bf-submit" type="button">补录</button>
+      <span class="msg ms-2" id="bf-msg"></span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3 class="card-title">补录总结</h3></div>
+  <div class="card-body">
+    <p class="text-muted">补录不检查截止（entry_source=admin 留痕）；已有记录按覆盖语义更新。</p>
+    <div class="row">
+      <div class="col-md-4">
+        <label class="form-label" for="bs-user">用户标识（手机号）</label>
+        <input type="text" class="form-control mono" id="bs-user" maxlength="32" placeholder="22644212509">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="bs-period">周期（日报 YYYY-MM-DD / 周报 YYYY-Www）</label>
+        <input type="text" class="form-control mono" id="bs-period" maxlength="16" placeholder="2026-10-13">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="bs-period-type">周期类型</label>
+        <select class="form-select" id="bs-period-type">
+          <option value="daily">daily 日报</option>
+          <option value="weekly">weekly 周报</option>
+        </select>
+      </div>
+    </div>
+    <div class="mt-3">
+      <label class="form-label" for="bs-content">总结内容</label>
+      <textarea class="form-control" id="bs-content" rows="3" placeholder="补录的总结内容"></textarea>
+    </div>
+    <div class="mt-3">
+      <button class="btn btn-primary" id="bs-submit" type="button">补录总结</button>
+      <span class="msg ms-2" id="bs-msg"></span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3 class="card-title">补录报数</h3></div>
+  <div class="card-body">
+    <p class="text-muted">字段取自本群字段池（勾选并填非负整数）；已有记录不能重复补录。</p>
+    <div class="row">
+      <div class="col-md-4">
+        <label class="form-label" for="br-user">用户标识（手机号）</label>
+        <input type="text" class="form-control mono" id="br-user" maxlength="32" placeholder="22644212509">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="br-period">日期（YYYY-MM-DD）</label>
+        <input type="text" class="form-control mono" id="br-period" maxlength="16" placeholder="2026-10-13">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label" for="br-role">角色</label>
+        <input type="text" class="form-control" id="br-role" maxlength="32" placeholder="开发">
+      </div>
+    </div>
+    <div class="mt-3">
+      <label class="form-label">字段与数量</label>
+      <div id="br-fields" class="text-muted">字段池加载中…</div>
+    </div>
+    <div class="mt-3">
+      <button class="btn btn-primary" id="br-submit" type="button">补录报数</button>
+      <span class="msg ms-2" id="br-msg"></span>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/admin-pages.js"></script>
+{% endblock %}

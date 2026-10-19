@@ -1,0 +1,263 @@
+# -*- coding: utf-8 -*-
+"""管理后台统计与导出（D3-C）：按群多维统计 + CSV / XLSX 下载。
+
+硬约束：
+- 纯读：只查 MCP 记录与本地名单，不写任何数据
+- 列口径与机器人侧群命令导出一致（app/handlers/stats.py 同列同序），
+  管理员下载与群成员收到的文件同源，便于互相校验
+- 查询失败时拒绝出文件（不出空表冒充成功）
+- CSV 带 UTF-8 BOM，保证 Excel 直接打开中文不乱码
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+from typing import Optional
+
+from openpyxl import Workbook
+
+from ..backend.base import Backend
+from ..state import StateStore
+
+BIZ_LABEL = {"checkin": "打卡", "summary": "总结", "report": "报数"}
+STATUS_LABEL = {"NORMAL": "按时", "LATE": "迟到", "ADMIN_EDIT": "后台补录"}
+SOURCE_LABEL = {"user": "群员", "admin": "管理员"}
+SESSION_LABEL = {"am": "上午", "pm": "下午"}
+
+_QUERIES = {"checkin": "checkin_query_records",
+            "summary": "summary_query_records",
+            "report": "report_query_records"}
+
+
+def resolve_period_key(state: StateStore, group_id: str, biz: str,
+                       date_str: str) -> str:
+    """日期（YYYY-MM-DD）-> 周期键。
+
+    打卡 / 报数按日；总结按群的周期类型（日报 = 该日期，周报 = 所在 ISO 周）。
+    日期非法 -> ValueError（调用方转 400 通俗提示）。
+    """
+    from ..period import parse_daily_key, period_key
+
+    dt = parse_daily_key(date_str)
+    if biz == "summary":
+        row = state.get_group_config(group_id)
+        period_type = "daily"
+        if row is not None and "period_type" in row.keys():
+            period_type = row["period_type"] or "daily"
+        return period_key(period_type or "daily", dt)
+    return date_str
+
+
+def query_records(backend: Backend, biz: str, group_id: str,
+                  period_key: str) -> list:
+    """按业务查一个周期的记录（不跨业务混查）。"""
+    query = getattr(backend, _QUERIES[biz])
+    return query(group_id=group_id,
+                 period_key=period_key).get("records") or []
+
+
+def _fmt_quantity(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return str(int(number))
+    return str(number)
+
+
+def records_to_rows(biz: str, records: list, period_type: str = "") -> tuple:
+    """记录 -> (表头, 数据行)。列口径与机器人侧导出一致。"""
+    if biz == "checkin":
+        headers = ["手机号", "姓名", "时段", "打卡时间", "状态", "录入来源",
+                   "图片名"]
+        rows = []
+        for rec in records:
+            session = rec.get("session") or ""
+            rows.append([
+                rec.get("phone") or "",
+                rec.get("name") or "",
+                SESSION_LABEL.get(session, session),
+                rec.get("checkin_time") or "",
+                STATUS_LABEL.get(rec.get("status"), rec.get("status") or ""),
+                SOURCE_LABEL.get(rec.get("entry_source"),
+                                 rec.get("entry_source") or ""),
+                rec.get("image_name") or "",
+            ])
+        return headers, rows
+
+    if biz == "summary":
+        headers = ["手机号", "姓名", "周期类型", "内容", "录入来源", "更新时间"]
+        rows = []
+        for rec in records:
+            rows.append([
+                rec.get("phone") or "",
+                rec.get("name") or "",
+                rec.get("period_type") or period_type or "",
+                rec.get("content") or "",
+                SOURCE_LABEL.get(rec.get("entry_source"),
+                                 rec.get("entry_source") or ""),
+                rec.get("updated_time") or "",
+            ])
+        return headers, rows
+
+    # report：动态字段宽表（每人一行，与机器人侧同口径）
+    columns = []
+    seen = set()
+    for rec in records:
+        for item in rec.get("items") or []:
+            fid = item.get("field_id")
+            if fid in seen:
+                continue
+            seen.add(fid)
+            name = item.get("field_name") or ("字段%s" % fid)
+            unit = item.get("unit")
+            columns.append((fid, "%s（%s）" % (name, unit) if unit else name))
+    columns.sort(key=lambda c: (c[0] is None, c[0]))
+    headers = ["手机号", "姓名", "角色"] + [header for _, header in columns]
+    rows = []
+    by_phone: dict = {}
+    for rec in records:
+        phone = rec.get("phone")
+        row = by_phone.setdefault(phone, {"name": rec.get("name") or "",
+                                          "role": rec.get("role") or "",
+                                          "values": {}})
+        for item in rec.get("items") or []:
+            row["values"][item.get("field_id")] = item.get("quantity")
+    for phone in sorted(by_phone):
+        row = by_phone[phone]
+        rows.append([phone, row["name"], row["role"]] +
+                    [_fmt_quantity(row["values"].get(fid, ""))
+                     for fid, _ in columns])
+    return headers, rows
+
+
+def to_csv(biz: str, records: list, period_type: str = "") -> str:
+    """CSV 文本（带 BOM）。"""
+    headers, rows = records_to_rows(biz, records, period_type)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(headers)
+    writer.writerows(rows)
+    return "\ufeff" + buffer.getvalue()
+
+
+def to_xlsx(biz: str, records: list, period_type: str = "") -> bytes:
+    """XLSX 字节流。"""
+    headers, rows = records_to_rows(biz, records, period_type)
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = BIZ_LABEL[biz]
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def build_stats(state: StateStore, backend: Backend, group_id: str, biz: str,
+                period_key: str) -> dict:
+    """页面用的多维统计（纯读）。"""
+    records = query_records(backend, biz, group_id, period_key)
+    try:
+        members = len(list(state.list_member_tasks(group_id,
+                                                   enabled_only=True)))
+    except Exception:
+        members = 0
+    phones = {r.get("phone") for r in records if r.get("phone")}
+    stats = {
+        "biz": biz,
+        "biz_label": BIZ_LABEL[biz],
+        "period_key": period_key,
+        "total": len(records),
+        "people": len(phones),
+        "members": members,
+        "missing": max(members - len(phones), 0),
+        "records": records,
+        "dimensions": [],
+    }
+    headers, table_rows = records_to_rows(biz, records, "")
+    stats["table"] = {"headers": headers, "rows": table_rows}
+
+    if biz == "checkin":
+        status_counts = {"NORMAL": 0, "LATE": 0, "ADMIN_EDIT": 0}
+        for rec in records:
+            key = rec.get("status")
+            if key in status_counts:
+                status_counts[key] += 1
+        stats["extra_label"] = "迟到人次"
+        stats["extra_value"] = status_counts["LATE"]
+        for key, label in (("NORMAL", "按时"), ("LATE", "迟到"),
+                           ("ADMIN_EDIT", "后台补录")):
+            stats["dimensions"].append(("提交状态", label, status_counts[key]))
+        session_counts: dict = {}
+        for rec in records:
+            session = rec.get("session") or "未标注"
+            session_counts[session] = session_counts.get(session, 0) + 1
+        for session, count in sorted(session_counts.items(),
+                                     key=lambda item: str(item[0])):
+            label = SESSION_LABEL.get(session, session)
+            stats["dimensions"].append(("打卡时段", label, count))
+
+    elif biz == "summary":
+        type_counts = {"daily": 0, "weekly": 0}
+        covered = 0
+        for rec in records:
+            key = rec.get("period_type") or "daily"
+            if key in type_counts:
+                type_counts[key] += 1
+            if (rec.get("updated_time") or "") != (rec.get("created_time")
+                                                   or ""):
+                covered += 1
+        stats["extra_label"] = "覆盖提交"
+        stats["extra_value"] = covered
+        stats["dimensions"].append(("周期", "日报", type_counts["daily"]))
+        stats["dimensions"].append(("周期", "周报", type_counts["weekly"]))
+        stats["dimensions"].append(("提交方式", "其中覆盖提交", covered))
+
+    else:  # report
+        role_counts: dict = {}
+        field_totals: dict = {}
+        field_people: dict = {}
+        for rec in records:
+            role = rec.get("role") or "未填角色"
+            role_counts[role] = role_counts.get(role, 0) + 1
+            for item in rec.get("items") or []:
+                name = item.get("field_name") or ("字段%s"
+                                                  % item.get("field_id"))
+                field_totals[name] = field_totals.get(name, 0) + float(
+                    item.get("quantity") or 0)
+                field_people.setdefault(name, set()).add(rec.get("phone"))
+        total_quantity = sum(field_totals.values())
+        stats["extra_label"] = "填报总量"
+        stats["extra_value"] = (_fmt_quantity(total_quantity)
+                                if float(total_quantity).is_integer()
+                                else total_quantity)
+        for role, count in sorted(role_counts.items()):
+            stats["dimensions"].append(("角色", role, count))
+        for name, total in sorted(field_totals.items(),
+                                  key=lambda item: -item[1]):
+            unit = ""
+            for rec in records:
+                for item in rec.get("items") or []:
+                    if (item.get("field_name") or "") == name and item.get("unit"):
+                        unit = item.get("unit")
+                        break
+                if unit:
+                    break
+            label = "%s（%s）" % (name, unit) if unit else name
+            stats["dimensions"].append(
+                ("字段", "%s，%d 人填报" % (label, len(field_people[name])),
+                 _fmt_quantity(total) if float(total).is_integer()
+                 else total))
+    return stats
+
+
+def export_filename(group_name: str, biz: str, period_key: str,
+                    fmt: str) -> str:
+    """下载文件名（中文，RFC 5987 编码由调用方拼接头）。"""
+    safe = "".join(ch if ch not in '\\/:*?"<>|' else "_"
+                   for ch in (group_name or "群"))[:40]
+    return "%s%s_%s.%s" % (BIZ_LABEL[biz], safe, period_key, fmt)

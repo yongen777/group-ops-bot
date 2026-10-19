@@ -1,0 +1,29 @@
+[Unit]
+Description=group-ops bot (callback :12334 + admin :18003 localhost-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=groupops
+Group=groupops
+WorkingDirectory=/opt/group-ops/repo
+EnvironmentFile=/etc/group-ops/group-ops-bot.env
+ExecStart=/opt/group-ops/venv/bin/python -m app.main
+Restart=always
+RestartSec=3
+
+# hardening: read-only filesystem except the data dir
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/group-ops/data
+
+# logs go to journal (journalctl -u group-ops-bot)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=group-ops-bot
+
+[Install]
+WantedBy=multi-user.target

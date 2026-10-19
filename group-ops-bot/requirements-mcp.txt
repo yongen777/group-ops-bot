@@ -1,0 +1,6 @@
+# 自研 MCP Server（业务持久化 + 幂等 + 回查，内部存储 MySQL qsm）
+# 凭据只走环境变量：GOPS_MYSQL_HOST / GOPS_MYSQL_PORT / GOPS_MYSQL_USER /
+# GOPS_MYSQL_PASSWORD / GOPS_MYSQL_DATABASE（见 app/config.py load_mysql_config）
+mcp>=1.0
+pymysql>=1.1
+pytest>=8.0

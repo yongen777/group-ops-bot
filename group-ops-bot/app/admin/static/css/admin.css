@@ -1,0 +1,20 @@
+/* D3-C：Tabler 浅色主题上的少量本项目定制。
+   只做补充，不大改官方样式；主风格即 Tabler 默认浅色（2026-10-15 用户确认）。 */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875em;
+}
+.msg.ok { color: var(--tblr-success, #2fb344); }
+.msg.err { color: var(--tblr-danger, #d63939); }
+.navbar-brand-image { height: 2rem; width: auto; }
+#sidebar-menu .dropdown-item.active { font-weight: 600; }
+.bf-field { display: flex; gap: .5rem; align-items: center; margin-bottom: .25rem; }
+.bf-field .bf-qty { max-width: 10rem; }
+code { background: var(--tblr-bg-surface-secondary, #f4f6fa); padding: .05rem .3rem; border-radius: .25rem; }
+
+/* 侧边栏多级折叠菜单：二/三级缩进 + 展开时箭头翻转 */
+.navbar-vertical .navbar-nav .navbar-nav > .nav-item > .nav-link { padding-left: 2.5rem; }
+.navbar-vertical .navbar-nav .navbar-nav .navbar-nav > .nav-item > .nav-link { padding-left: 3.5rem; }
+.navbar-vertical .nav-link .nav-arrow { font-size: 0.75rem; transition: transform .15s ease; }
+.navbar-vertical .nav-link[aria-expanded="true"] .nav-arrow { transform: rotate(180deg); }
+.navbar-vertical .navbar-nav .navbar-nav .nav-link-title { font-weight: 400; }

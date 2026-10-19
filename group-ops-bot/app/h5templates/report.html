@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>报数</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #f6f6f6; color: #222; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 14px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .row { display: flex; align-items: center; gap: 8px; padding: 8px 0;
+         border-bottom: 1px solid #f0f0f0; }
+  .row:last-child { border-bottom: none; }
+  .row select { flex: 1; min-width: 0; padding: 8px; font-size: 14px;
+                border: 1px solid #ddd; border-radius: 8px; background: #fff; }
+  .row input.qty { width: 96px; padding: 8px; font-size: 14px; text-align: right;
+                   border: 1px solid #ddd; border-radius: 8px; }
+  .row .del { width: 32px; flex: none; border: none; background: none; color: #c5221f;
+              font-size: 18px; line-height: 1; padding: 4px; cursor: pointer; }
+  .row .del:disabled { color: #ccc; cursor: default; }
+  .empty { color: #888; font-size: 13px; padding: 12px 0; text-align: center; }
+  .add-btn { width: 100%; padding: 10px; border: 1px dashed #1a73e8; border-radius: 10px;
+             font-size: 14px; margin-top: 10px; background: #fff; color: #1a73e8; }
+  .add-btn:disabled { border-color: #ccc; color: #ccc; }
+  button { width: 100%; padding: 12px; border: none; border-radius: 10px;
+           font-size: 15px; margin-top: 10px; background: #1a73e8; color: #fff; }
+  button:disabled { opacity: .5; }
+  #status { font-size: 14px; line-height: 1.6; margin-top: 14px; white-space: pre-wrap; }
+  .ok { color: #137333; }
+  .warn { color: #b06000; }
+  .err { color: #c5221f; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>今日报数</h1>
+  <div class="sub">按需添加本次要报的字段并填写数量（可添加多行）</div>
+
+  <div class="card">
+    <div id="fields"><div class="empty">字段加载中…</div></div>
+    <button id="addBtn" class="add-btn" type="button" disabled>+ 添加报数字段</button>
+  </div>
+
+  <button id="submitBtn" type="button" disabled>提交报数</button>
+  <div id="status"></div>
+</div>
+
+<script>
+(function () {
+  var hash = (location.hash || "").replace(/^#/, "");
+  var token = "";
+  hash.split("&").forEach(function (kv) {
+    var i = kv.indexOf("=");
+    if (i > 0 && kv.slice(0, i) === "t") {
+      token = decodeURIComponent(kv.slice(i + 1));
+    }
+  });
+
+  function $(id) { return document.getElementById(id); }
+  function say(text, cls) {
+    var el = $("status");
+    el.textContent = text;
+    el.className = cls || "";
+  }
+  function post(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); });
+  }
+
+  var fields = [];        // 字段池（info 返回，全局共享）
+  var rows = [];          // 已添加的行 { select, qty }
+
+  function fieldLabel(f) {
+    return f.unit ? (f.field_name + "（" + f.unit + "）") : f.field_name;
+  }
+
+  function showEmptyHint() {
+    $("fields").innerHTML = '<div class="empty">点击下方「+ 添加报数字段」，按需添加要报的字段</div>';
+  }
+
+  function refreshSelects() {
+    // 防重复：已被其他行选中的字段，在本行下拉里置灰（服务端仍会兜底拒绝）
+    rows.forEach(function (row) {
+      var chosen = row.select.value;
+      Array.prototype.forEach.call(row.select.options, function (opt) {
+        opt.disabled = opt.value !== "" && opt.value !== chosen &&
+          rows.some(function (other) {
+            return other !== row && other.select.value === opt.value;
+          });
+      });
+    });
+  }
+
+  function refreshSubmitState() {
+    var valid = rows.length > 0 && rows.every(function (row) {
+      return row.select.value !== "" && /^\d+$/.test(row.qty.value.trim());
+    });
+    $("submitBtn").disabled = !valid;
+  }
+
+  function removeRow(row) {
+    var i = rows.indexOf(row);
+    if (i >= 0) { rows.splice(i, 1); }
+    row.select.parentNode.removeChild(row.select.parentNode);
+    if (!rows.length) { showEmptyHint(); }
+    refreshSelects();
+    refreshSubmitState();
+  }
+
+  function addRow() {
+    if (rows.length >= 50) { say("一次最多添加 50 个字段。", "warn"); return; }
+    if (!rows.length) { $("fields").innerHTML = ""; }
+    var rowEl = document.createElement("div");
+    rowEl.className = "row";
+    var select = document.createElement("select");
+    var placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "请选择字段";
+    select.appendChild(placeholder);
+    fields.forEach(function (f) {
+      var opt = document.createElement("option");
+      opt.value = String(f.field_id);
+      opt.textContent = fieldLabel(f);
+      select.appendChild(opt);
+    });
+    var qty = document.createElement("input");
+    qty.type = "number";
+    qty.className = "qty";
+    qty.min = "0";
+    qty.step = "1";
+    qty.inputMode = "numeric";
+    qty.placeholder = "数量";
+    var del = document.createElement("button");
+    del.type = "button";
+    del.className = "del";
+    del.title = "删除本行";
+    del.textContent = "×";
+    var row = { select: select, qty: qty };
+    del.addEventListener("click", function () { removeRow(row); });
+    select.addEventListener("change", function () {
+      refreshSelects();
+      refreshSubmitState();
+    });
+    qty.addEventListener("input", refreshSubmitState);
+    rowEl.appendChild(select);
+    rowEl.appendChild(qty);
+    rowEl.appendChild(del);
+    $("fields").appendChild(rowEl);
+    rows.push(row);
+    refreshSelects();
+    refreshSubmitState();
+  }
+
+  if (!token) {
+    say("链接缺少凭证，请返回群聊重新发送「报数」。", "err");
+    $("fields").innerHTML = "";
+    return;
+  }
+
+  post("/api/h5/report/info", { token: token }).then(function (data) {
+    if (!data.ok) {
+      $("fields").innerHTML = "";
+      say(data.message || "链接无效或已被作废，请重新发送「报数」。", "err");
+      return;
+    }
+    if (data.done) {
+      // ⭐ 修复：完成态也必须清掉「字段加载中…」占位（2026-10-16 用户报障）
+      $("fields").innerHTML = '<div class="empty">今日报数已完成，无需重复提交。</div>';
+      say("今日报数已完成，无需重复提交。", "ok");
+      $("submitBtn").disabled = true;
+      $("addBtn").disabled = true;
+      return;
+    }
+    fields = data.fields || [];
+    if (!fields.length) {
+      $("fields").innerHTML = '<div class="empty">本群尚未配置报数字段，请联系管理员在后台维护。</div>';
+      $("addBtn").disabled = true;
+      return;
+    }
+    showEmptyHint();
+    $("addBtn").disabled = false;
+  }).catch(function () {
+    $("fields").innerHTML = "";
+    say("网络异常，请稍后重试。", "err");
+  });
+
+  $("addBtn").addEventListener("click", addRow);
+
+  $("submitBtn").addEventListener("click", function () {
+    var items = [];
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var label = row.select.options[row.select.selectedIndex].text;
+      if (!row.select.value) {
+        say("还有一行未选择字段，请选择或删除该行。", "warn");
+        return;
+      }
+      var raw = row.qty.value.trim();
+      if (!/^\d+$/.test(raw)) {
+        say("数量必须是不小于 0 的整数，请检查「" + label + "」。", "warn");
+        return;
+      }
+      items.push({ field_id: parseInt(row.select.value, 10),
+                   quantity: parseInt(raw, 10) });
+    }
+    if (!items.length) { say("请至少添加一个要报的字段。", "warn"); return; }
+    say("正在提交…", "");
+    // ⛔ 不再发送 role（2026-10-16 去角色化：角色由服务端派生）
+    post("/api/h5/report/submit", { token: token, items: items })
+      .then(function (data) {
+        say(data.message || "", data.ok ? "ok" : (data.kind === "C" ? "warn" : "err"));
+        if (data.ok) {
+          $("submitBtn").disabled = true;
+          $("addBtn").disabled = true;
+        }
+      })
+      .catch(function () { say("提交失败，请稍后重试。", "err"); });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{% extends "layout.html" %}
+{% block title %}审计日志{% endblock %}
+{% block pretitle %}系统{% endblock %}
+{% block heading %}审计日志{% endblock %}
+{% block actions %}<span class="text-muted small">最近 100 条，只读</span>{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-vcenter card-table">
+        <thead>
+          <tr><th>时间</th><th>操作人</th><th>动作</th><th>目标</th><th>结果</th><th>IP</th><th>详情</th></tr>
+        </thead>
+        <tbody>
+          {% for a in entries %}
+          <tr>
+            <td class="text-muted text-nowrap">{{ a.created_at }}</td>
+            <td>{{ a.username }}</td>
+            <td class="mono">{{ a.action }}</td>
+            <td class="text-muted">{{ a.target.strip() or '—' }}</td>
+            <td>
+              {% if a.result == 'ok' %}
+              <span class="badge bg-success-lt">ok</span>
+              {% else %}
+              <span class="badge bg-danger-lt">{{ a.result }}</span>
+              {% endif %}
+            </td>
+            <td class="text-muted">{{ a.ip }}</td>
+            <td class="text-muted small">{{ a.detail or '—' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="text-muted text-center">暂无记录</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card-footer text-muted">管理操作留痕（操作人 / 动作 / 目标 / 结果 / IP），只读；不含任何凭据信息。</div>
+</div>
+{% endblock %}

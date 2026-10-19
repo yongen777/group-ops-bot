@@ -1,0 +1,50 @@
+{% extends "layout.html" %}
+{% block body_attrs %} data-page="group-fields" data-group-id="{{ group.group_id|urlencode }}"{% endblock %}
+{% block title %}报数字段池{% endblock %}
+{% block pretitle %}业务配置{% endblock %}
+{% block heading %}{{ tab_label }}{% endblock %}
+{% block crumb %}{{ group.group_name }} · 字段池{% endblock %}
+{% block content %}
+<div class="alert alert-info" role="alert">
+  <div class="d-flex">
+    <div><i class="ti ti-info-circle me-2"></i></div>
+    <div>当前群：<b>{{ group.group_name }}</b>（<span class="mono">{{ group.group_id }}</span>）。
+      字段由后台按群提前定义，对所有群员全局共享（不区分角色）；群员在手机填报页按需添加。停用会保留历史数据，删除等同停用，已报数据不会被清除。</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3 class="card-title">新增字段</h3></div>
+  <div class="card-body">
+    <div class="row">
+      <div class="col-md-5">
+        <label class="form-label" for="fd-name">字段名</label>
+        <input type="text" class="form-control" id="fd-name" maxlength="64" placeholder="销售额">
+      </div>
+      <div class="col-md-5">
+        <label class="form-label" for="fd-unit">单位（可选）</label>
+        <input type="text" class="form-control" id="fd-unit" maxlength="16" placeholder="元 / 个 / 行">
+      </div>
+      <div class="col-md-2 d-flex align-items-end">
+        <button class="btn btn-primary" id="fd-add-btn" type="button">新增字段</button>
+      </div>
+    </div>
+    <span class="msg mt-2 d-block" id="fd-msg"></span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-vcenter card-table">
+        <thead>
+          <tr><th>ID</th><th>字段名</th><th>单位</th><th>状态</th><th class="w-1">操作</th></tr>
+        </thead>
+        <tbody id="fd-tbody">
+          <tr><td colspan="5" class="text-muted text-center">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/admin-pages.js"></script>
+{% endblock %}

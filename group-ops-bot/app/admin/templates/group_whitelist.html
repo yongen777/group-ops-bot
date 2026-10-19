@@ -1,0 +1,50 @@
+{% extends "layout.html" %}
+{% block body_attrs %} data-page="group-whitelist" data-group-id="{{ group.group_id|urlencode }}"{% endblock %}
+{% block title %}导出白名单{% endblock %}
+{% block pretitle %}业务配置{% endblock %}
+{% block heading %}{{ tab_label }}{% endblock %}
+{% block crumb %}{{ group.group_name }} · 导出白名单{% endblock %}
+{% block content %}
+<div class="alert alert-info" role="alert">
+  <div class="d-flex">
+    <div><i class="ti ti-info-circle me-2"></i></div>
+    <div>当前群：<b>{{ group.group_name }}</b>（<span class="mono">{{ group.group_id }}</span>）。
+      授权对象限本群应交人员（从下方下拉选择，需先在「群设置 → 应交人员」中添加）；
+      权限只有一种——<b>全部管理员操作权限</b>（一键授予，当前即群内「导出」命令：
+      一次导出打卡 / 总结 / 报数三张表）。移除应交人员时其导出授权自动失效。</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3 class="card-title">新增授权</h3></div>
+  <div class="card-body">
+    <div class="row">
+      <div class="col-md-8">
+        <label class="form-label" for="wl-user">应交人员（授权后可使用群内「导出」命令）</label>
+        <select class="form-select" id="wl-user">
+          <option value="">加载中…</option>
+        </select>
+      </div>
+      <div class="col-md-4 d-flex align-items-end">
+        <button class="btn btn-primary" id="wl-add-btn" type="button">授权全部管理员操作权限</button>
+      </div>
+    </div>
+    <span class="msg mt-2 d-block" id="wl-msg"></span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-vcenter card-table">
+        <thead>
+          <tr><th>用户标识</th><th>昵称</th><th>权限</th><th>更新时间</th><th class="w-1">操作</th></tr>
+        </thead>
+        <tbody id="wl-tbody">
+          <tr><td colspan="5" class="text-muted text-center">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/admin-pages.js"></script>
+{% endblock %}

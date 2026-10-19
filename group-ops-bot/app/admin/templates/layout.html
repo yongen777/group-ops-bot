@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<!-- data-bs-navbar-position="vertical"：Tabler 1.x 垂直侧边栏布局的**必需属性**。
+     缺失时 .navbar-vertical 被判为 offcanvas → 整个 aside display:none、
+     尺寸 0x0 → 侧边栏所有入口（群实例绑定 / 应交人员 / 统计中心…）全部不可见。
+     2026-10-15 实测根因（浏览器 computed style 实证，⛔ pytest 测不到 CSS）。 -->
+<html lang="zh-CN" data-bs-navbar-position="vertical">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}仪表盘{% endblock %} · 群运维机器人管理后台</title>
+<link rel="icon" href="/static/images/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/css/tabler.min.css">
+<link rel="stylesheet" href="/static/css/tabler-icons.min.css">
+<link rel="stylesheet" href="/static/css/admin.css">
+{% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
+</head>
+<body{% block body_attrs %}{% endblock %}>
+<div class="page">
+  {% include "components/sidebar.html" %}
+  {% include "components/header.html" %}
+  <div class="page-wrapper">
+    <div class="page-header d-print-none">
+      <div class="container-xl">
+        <div class="row g-2 align-items-center">
+          <div class="col">
+            <div class="page-pretitle">{% block pretitle %}群运维机器人{% endblock %}</div>
+            <h2 class="page-title">{% block heading %}仪表盘{% endblock %}</h2>
+          </div>
+          <div class="col-auto ms-auto d-print-none">
+            {% block actions %}{% endblock %}
+          </div>
+        </div>
+        {% block breadcrumb %}
+        <ol class="breadcrumb" aria-label="breadcrumbs">
+          <li class="breadcrumb-item"><a href="/">首页</a></li>
+          <li class="breadcrumb-item active">{% block crumb %}仪表盘{% endblock %}</li>
+        </ol>
+        {% endblock %}
+      </div>
+    </div>
+    <div class="page-body">
+      <div class="container-xl">
+        {% block content %}{% endblock %}
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/static/js/tabler.min.js"></script>
+<script src="/static/js/admin-core.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

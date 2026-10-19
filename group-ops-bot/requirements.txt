@@ -1,0 +1,9 @@
+# 群运维机器人（:18002 群回调 + H5 + 上传；:18003 管理后台）
+# 机器人侧不直连 MySQL；业务读写经自研 MCP Server（mcp-server/）。
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+openpyxl>=3.1
+httpx>=0.27
+python-multipart>=0.0.9   # H5 图片上传 multipart（§4.11.4 D4 定夺）
+pytest>=8.0

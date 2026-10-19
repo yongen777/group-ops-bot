@@ -1,0 +1,32 @@
+# ===== 不进仓库的内容 =====
+
+# 根目录设计 / 验收文档：含测试服务器地址与部署细节（需要时单独脱敏再放行）
+/*.md
+
+# 部署截图（含页面与内网信息）
+deploy/shots/
+
+# Python 缓存与构建产物
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# 运行期数据（SQLite / 上传图片 / 日志）
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+
+# 真实环境变量文件（模板 *.template 允许入库）
+*.env
+!*.env.template
+
+# 虚拟环境
+.venv/
+venv/
