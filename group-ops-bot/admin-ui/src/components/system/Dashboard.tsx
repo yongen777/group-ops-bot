@@ -12,6 +12,7 @@ import {
   Pencil,
   Eye,
   UserPlus,
+  ChevronDown,
 } from 'lucide-react';
 import { api, gid } from '../../lib/api';
 import { useApp } from '../../lib/store';
@@ -102,6 +103,7 @@ export const Dashboard: React.FC = () => {
   } | null>(null);
   const [addMemberTarget, setAddMemberTarget] = useState<BoardMember | null>(null);
   const [reminding, setReminding] = useState(false);
+  const [remindMenuOpen, setRemindMenuOpen] = useState(false);
 
   const date = todayStr();
 
@@ -181,17 +183,20 @@ export const Dashboard: React.FC = () => {
   };
 
   // 提醒业务：向今日未达标成员定向催办（复用后台手动提醒链路，⛔ 不伪造结果）
-  const handleRemindPending = async () => {
+  const handleRemindPending = async (
+    biz?: 'checkin' | 'summary' | 'report',
+  ) => {
     if (!selectedGroupId) return;
     if (pendingMembers.length === 0) {
       showToast('当前群聊今日全员皆已达标，暂无需要提醒的成员');
       return;
     }
+    setRemindMenuOpen(false);
     setReminding(true);
     try {
       const result = await api.post<{ ok: boolean; message: string }>(
         `/api/admin/groups/${gid(selectedGroupId)}/reminders/run`,
-        {},
+        biz ? { biz } : {},
       );
       showToast(result.message || '已发起提醒');
       load();
@@ -774,7 +779,6 @@ export const Dashboard: React.FC = () => {
                     <th className="py-2.5 px-3.5">全部用户</th>
                     <th className="py-2.5 px-3">完成提交时间</th>
                     <th className="py-2.5 px-3">完成的总结内容 / 汇报信息</th>
-                    <th className="py-2.5 px-3">附件图片</th>
                     <th className="py-2.5 px-3">状态</th>
                     <th className="py-2.5 px-3 text-right">操作</th>
                   </tr>
@@ -803,9 +807,6 @@ export const Dashboard: React.FC = () => {
                         ) : (
                           <span className="text-slate-400">—</span>
                         )}
-                      </td>
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <span className="text-slate-400 text-[11px]">暂无图片</span>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
                         {statusCell(m.summary_status, m, 'summary')}
@@ -857,7 +858,6 @@ export const Dashboard: React.FC = () => {
                     <th className="py-2.5 px-3">完成报数时间</th>
                     <th className="py-2.5 px-3">完成的信息 / 量化报数数据</th>
                     <th className="py-2.5 px-3">指标汇总</th>
-                    <th className="py-2.5 px-3">凭证图片</th>
                     <th className="py-2.5 px-3">状态</th>
                     <th className="py-2.5 px-3 text-right">操作</th>
                   </tr>
@@ -891,9 +891,6 @@ export const Dashboard: React.FC = () => {
                         <span className="font-mono text-emerald-700 font-bold text-sm">
                           {m.report?.total || 0} 项
                         </span>
-                      </td>
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <span className="text-slate-400 text-[11px]">暂无图片</span>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
                         {statusCell(m.report_status, m, 'report')}
@@ -945,24 +942,69 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={handleRemindPending}
-            disabled={reminding || pendingMembers.length === 0}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer shrink-0 ${
-              pendingMembers.length > 0
-                ? 'bg-amber-500 hover:bg-amber-600 text-white'
-                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-            }`}
-            title="向今日未完成业务的成员发送群内提醒与催办消息"
-          >
-            <BellRing className="w-4 h-4" />
-            <span>{reminding ? '正在提醒…' : '提醒业务'}</span>
-            {pendingMembers.length > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 bg-amber-600 text-white text-[10px] rounded-full">
-                {pendingMembers.length}人待催
-              </span>
+          <div className="relative shrink-0">
+            <button
+              onClick={() => setRemindMenuOpen((v) => !v)}
+              disabled={reminding || pendingMembers.length === 0}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                pendingMembers.length > 0
+                  ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+              }`}
+              title="按业务向今日未完成的成员发送群内提醒与催办消息"
+            >
+              <BellRing className="w-4 h-4" />
+              <span>{reminding ? '正在提醒…' : '提醒业务'}</span>
+              {pendingMembers.length > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 bg-amber-600 text-white text-[10px] rounded-full">
+                  {pendingMembers.length}人待催
+                </span>
+              )}
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+
+            {remindMenuOpen && pendingMembers.length > 0 && (
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setRemindMenuOpen(false)}
+                />
+                <div className="absolute right-0 mt-1.5 z-40 w-48 bg-white border border-slate-200 rounded-xl shadow-lg py-1 text-xs overflow-hidden">
+                  <div className="px-3 py-1.5 text-[10px] text-slate-400 font-semibold">
+                    选择提醒范围
+                  </div>
+                  <button
+                    onClick={() => handleRemindPending()}
+                    className="w-full text-left px-3 py-2 hover:bg-amber-50 text-slate-700 font-semibold cursor-pointer flex items-center gap-2"
+                  >
+                    <BellRing className="w-3.5 h-3.5 text-amber-600" />
+                    <span>全部业务一键提醒</span>
+                  </button>
+                  <button
+                    onClick={() => handleRemindPending('checkin')}
+                    className="w-full text-left px-3 py-2 hover:bg-blue-50 text-slate-700 cursor-pointer flex items-center gap-2"
+                  >
+                    <Clock className="w-3.5 h-3.5 text-blue-600" />
+                    <span>仅提醒打卡</span>
+                  </button>
+                  <button
+                    onClick={() => handleRemindPending('summary')}
+                    className="w-full text-left px-3 py-2 hover:bg-amber-50 text-slate-700 cursor-pointer flex items-center gap-2"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-amber-600" />
+                    <span>仅提醒总结</span>
+                  </button>
+                  <button
+                    onClick={() => handleRemindPending('report')}
+                    className="w-full text-left px-3 py-2 hover:bg-emerald-50 text-slate-700 cursor-pointer flex items-center gap-2"
+                  >
+                    <BarChart3 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>仅提醒报数</span>
+                  </button>
+                </div>
+              </>
             )}
-          </button>
+          </div>
         </div>
 
         {pendingMembers.length === 0 ? (
@@ -1078,7 +1120,6 @@ export const Dashboard: React.FC = () => {
           isOpen
           groupId={selectedGroupId}
           userId={addMemberTarget.user_id}
-          defaultName={addMemberTarget.nickname || ''}
           defaultRole={addMemberTarget.role || ''}
           onClose={() => setAddMemberTarget(null)}
           onAdded={(message) => {

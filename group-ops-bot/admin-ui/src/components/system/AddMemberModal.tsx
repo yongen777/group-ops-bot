@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, UserPlus, X } from 'lucide-react';
 import { api, gid } from '../../lib/api';
+import { ROLE_LABEL, ROLE_OPTIONS } from '../../lib/roles';
 
 interface Props {
   isOpen: boolean;
   groupId: string;
   userId: string;
-  defaultName?: string;
   defaultRole?: string;
   onClose: () => void;
   onAdded: (message: string) => void;
@@ -16,28 +16,30 @@ interface Props {
  * 一键添加该成员（名单外成员完成了业务时出现）。
  *
  * 口径：只往本群名单写「姓名 + 岗位角色」，⛔ 不改业务记录、⛔ 不建管理权限。
+ * 2026-10-19 用户指令：姓名**默认留空**（⛔ 不拿手机号占位），
+ * 岗位角色改为与群管理同一套下拉选项。
  */
 export const AddMemberModal: React.FC<Props> = ({
   isOpen,
   groupId,
   userId,
-  defaultName,
   defaultRole,
   onClose,
   onAdded,
 }) => {
-  const [nickname, setNickname] = useState(defaultName || '');
+  const [nickname, setNickname] = useState('');
   const [role, setRole] = useState(defaultRole || '');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
-    setNickname(defaultName || '');
+    // ⛔ 不预填姓名：手机号不是姓名，预填会让管理员直接点保存
+    setNickname('');
     setRole(defaultRole || '');
     setError('');
     setSaving(false);
-  }, [isOpen, defaultName, defaultRole, userId]);
+  }, [isOpen, defaultRole, userId]);
 
   if (!isOpen) return null;
 
@@ -107,13 +109,16 @@ export const AddMemberModal: React.FC<Props> = ({
           </div>
           <div>
             <label className="text-[11px] font-semibold text-slate-600 mb-1 block">岗位角色</label>
-            <input
+            <select
               value={role}
               onChange={(e) => setRole(e.target.value)}
-              maxLength={32}
-              placeholder="例如：值班经理"
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-800 outline-none focus:border-blue-500"
-            />
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-800 outline-none focus:border-blue-500 bg-white"
+            >
+              <option value="">未设置</option>
+              {ROLE_OPTIONS.map((item) => (
+                <option key={item} value={item}>{ROLE_LABEL[item]}</option>
+              ))}
+            </select>
           </div>
           {error && (
             <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-[11px] text-rose-700 flex items-start gap-2">

@@ -14,14 +14,33 @@ from typing import Optional
 
 def handle_upsert(writer, *, phone: str, name: Optional[str],
                   platform_user_id: Optional[str], department: Optional[str],
-                  source: str) -> dict:
+                  source: str, group_id: Optional[str] = None) -> dict:
+    """按 phone upsert + operation_log 留痕。
+
+    2026-10-19：群内「实名」登记要求「写入 sys_user 并记录 operation_log」，
+    故本工具补一条 op_log（pending -> success 同一事务），group_id 可为空
+    （后台/系统调用没有群上下文）。
+    """
+    import json
+    import uuid
+
+    request_id = "user-upsert-%s" % uuid.uuid4().hex
     with writer.pool.connection() as conn:
         with conn.cursor() as cur:
             before = writer.dao.get_user(cur, phone)
+            writer.dao.insert_op_log(
+                cur, request_id, "user.upsert", "user", group_id, None, None,
+                json.dumps({"phone": phone, "name": name, "source": source},
+                           ensure_ascii=False))
             user_id = writer.dao.upsert_user(
                 cur, phone, name, platform_user_id, department, source)
+            created = before is None
+            writer.dao.finish_op_log(
+                cur, request_id, "success",
+                json.dumps({"user_id": user_id, "created": created}),
+                user_id, None, None)
         conn.commit()
-    return {"user_id": user_id, "created": before is None}
+    return {"user_id": user_id, "created": created}
 
 
 def handle_get(writer, *, phone: str) -> dict:
@@ -61,11 +80,13 @@ def register(mcp, writer) -> None:
     def user_upsert(phone: str, name: str | None = None,
                     platform_user_id: str | None = None,
                     department: str | None = None,
-                    source: str = "learned") -> dict:
-        """按手机号 upsert 人员目录。source: manual/learned。"""
+                    source: str = "learned",
+                    group_id: str | None = None) -> dict:
+        """按手机号 upsert 人员目录（source: manual/learned；写 operation_log）。"""
         return handle_upsert(writer, phone=phone, name=name,
                              platform_user_id=platform_user_id,
-                             department=department, source=source)
+                             department=department, source=source,
+                             group_id=group_id)
 
     @mcp.tool(name="user.get")
     def user_get(phone: str) -> dict:

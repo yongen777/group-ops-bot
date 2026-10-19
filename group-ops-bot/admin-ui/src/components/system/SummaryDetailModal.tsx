@@ -1,14 +1,11 @@
 import React from 'react';
-import { FileText, Image as ImageIcon, Pencil, X } from 'lucide-react';
+import { FileText, Pencil, X } from 'lucide-react';
 import type { BoardMember } from '../../lib/types';
 
 interface Props {
   member: BoardMember | null;
-  /** 总结附件原图（当前数据模型只有打卡带图，无则为空） */
-  attachmentUrl?: string;
   onClose: () => void;
   onOpenEdit: (member: BoardMember) => void;
-  onPreviewImage?: (url: string, title: string) => void;
 }
 
 /**
@@ -16,13 +13,12 @@ interface Props {
  *
  * 硬约束：⛔ 不编造字段。后端只存「正文 / 提交时间 / 来源 / 周期类型」，
  * 这里就只展示这四项 —— 没有的段落（例如协同进展）不虚构。
+ * 2026-10-19 用户指令：移除附件图片段（该业务本就不采集图片）。
  */
 export const SummaryDetailModal: React.FC<Props> = ({
   member,
-  attachmentUrl,
   onClose,
   onOpenEdit,
-  onPreviewImage,
 }) => {
   if (!member || !member.summary) return null;
   const s = member.summary;
@@ -63,23 +59,6 @@ export const SummaryDetailModal: React.FC<Props> = ({
             <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 leading-relaxed whitespace-pre-wrap break-words">
               {s.content || '（正文为空）'}
             </div>
-          </section>
-
-          <section>
-            <h4 className="text-xs font-bold text-slate-900 mb-1.5">附件原图</h4>
-            {attachmentUrl ? (
-              <button
-                onClick={() => onPreviewImage?.(attachmentUrl, `${name} - 总结附件图片`)}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50/40 transition-colors text-xs text-slate-700 cursor-pointer"
-              >
-                <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
-                <span>查看附件原图</span>
-              </button>
-            ) : (
-              <p className="text-[11px] text-slate-400">
-                本业务当前不采集图片附件（仅打卡业务支持上传凭证图片）。
-              </p>
-            )}
           </section>
 
           <section>

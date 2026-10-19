@@ -609,12 +609,31 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                           required=False) if "role" in body else current["role"]
         enabled = bool(body["enabled"]) if "enabled" in body \
             else bool(current["enabled"])
+        # 2026-10-19 用户指令：群成员编辑可修改手机号（唯一标识）。
+        # ⛔ 只改名单配置行（+ 跟着人走的导出授权），历史业务记录仍按旧手机号
+        # 留在 MySQL，不会跟着改 —— 这一点必须让管理员知道。
+        old_user_id = user_id
+        if "new_user_id" in body:
+            new_user_id = _clean_str(body.get("new_user_id"), "手机号码", 32)
+            if new_user_id != user_id:
+                if not re.match(r"^[0-9A-Za-z_-]{4,32}$", new_user_id):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="手机号码需为 4~32 位数字/字母")
+                if any(r["user_id"] == new_user_id
+                       for r in state.list_member_tasks(group_id)):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="该手机号码已在群成员名单中")
+                state.rename_member_task(group_id, user_id, new_user_id)
+                user_id = new_user_id
         state.upsert_member_task(group_id, user_id, nickname=nickname,
                                  role=role, enabled=enabled)
         _audit(state, request, identity, "member.update", "member",
                "%s/%s" % (group_id, user_id),
-               {"nickname": nickname, "role": role, "enabled": enabled})
-        return {"ok": True}
+               {"nickname": nickname, "role": role, "enabled": enabled,
+                "old_user_id": old_user_id, "new_user_id": user_id})
+        return {"ok": True, "user_id": user_id}
 
     @router.delete("/groups/{group_id}/members/{user_id}")
     def remove_member(group_id: str, user_id: str, request: Request):
@@ -1126,19 +1145,20 @@ def create_admin_router(*, state: StateStore, backend: Backend,
     def stats_export(request: Request, group_id: str, date: str,
                      biz: Optional[str] = None, scope: str = "single",
                      format: str = "csv", remark: Optional[str] = None):
-        """统计导出。
+        """统计导出（⭐ 2026-10-19 用户指令：**只保留 CSV**）。
 
-        2026-10-19（照参考后台 1:1）：新增 scope=all —— 一天 × 全员 × 三业务
-        的单表 CSV / 三工作表 XLSX；scope=single 保留原单业务口径（⛔ 旧入口
-        不破坏）。remark 只落审计，⛔ 不进文件内容。
+        Excel（xlsx）能力已移除：format 只接受 csv，传 xlsx 明确 400，
+        ⛔ 不静默降级成 csv 冒充用户要的格式。
+        scope=all（一天×全员×三业务单表）/ single（单业务清单）两种口径
+        都走 CSV；remark 只落审计，⛔ 不进文件内容。
         """
         identity = _identity(request, state)
         _require_password_changed(identity)
         if scope not in ("single", "all"):
             raise HTTPException(status_code=400, detail="导出范围不正确")
-        if format not in ("csv", "xlsx"):
+        if format != "csv":
             raise HTTPException(status_code=400,
-                                detail="下载格式不支持，请选择表格或工作簿")
+                                detail="目前仅支持 CSV 导出（Excel 导出能力已移除）")
         row = state.get_group_config(group_id)
         if row is None:
             raise HTTPException(status_code=404, detail="群不存在")
@@ -1146,8 +1166,6 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                       else group_id)
         period_type = (row["period_type"] if "period_type" in row.keys()
                        else "daily")
-        media_xlsx = ("application/vnd.openxmlformats-officedocument"
-                      ".spreadsheetml.sheet")
 
         if scope == "all":
             from ..period import parse_daily_key
@@ -1161,22 +1179,9 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                 # ⛔ 不出半张空表冒充成功：查不到就明确说稍后重试
                 raise HTTPException(status_code=503,
                                     detail="数据暂时查不到，请稍后重试")
-            if format == "csv":
-                headers, rows = board_mod.board_rows(board)
-                content = stats_mod.rows_to_csv(headers, rows).encode("utf-8")
-                media = "text/csv; charset=utf-8"
-            else:
-                sheets = []
-                for biz_key in ("checkin", "summary", "report"):
-                    pkey = board["period_keys"][biz_key]
-                    records = stats_mod.query_records(backend, biz_key,
-                                                      group_id, pkey)
-                    headers, rows = stats_mod.records_to_rows(
-                        biz_key, records, period_type)
-                    sheets.append((stats_mod.BIZ_LABEL[biz_key], headers,
-                                   rows))
-                content = stats_mod.multi_sheet_xlsx(sheets)
-                media = media_xlsx
+            headers, rows = board_mod.board_rows(board)
+            content = stats_mod.rows_to_csv(headers, rows).encode("utf-8")
+            media = "text/csv; charset=utf-8"
             filename = stats_mod.all_export_filename(group_name, date, format)
             _audit(state, request, identity, "stats.export", "group",
                    group_id, {"scope": "all", "format": format,
@@ -1202,13 +1207,9 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                                 detail="数据暂时查不到，请稍后重试")
         filename = stats_mod.export_filename(group_name, biz, period_k,
                                              format)
-        if format == "csv":
-            content = stats_mod.to_csv(biz, records,
-                                       period_type).encode("utf-8")
-            media = "text/csv; charset=utf-8"
-        else:
-            content = stats_mod.to_xlsx(biz, records, period_type)
-            media = media_xlsx
+        content = stats_mod.to_csv(biz, records,
+                                   period_type).encode("utf-8")
+        media = "text/csv; charset=utf-8"
         _audit(state, request, identity, "stats.export", "group", group_id,
                {"scope": "single", "biz": biz, "format": format,
                 "date": date, "remark": remark})

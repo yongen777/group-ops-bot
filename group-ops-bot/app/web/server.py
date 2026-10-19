@@ -23,8 +23,11 @@
      否 -> 下一步
   3) 当前群 + 发送者是否存在待输入群名的绑定会话？—— 是 -> 第 2 轮
      （群名接收 / 取消 / 超时 / 二次鉴权 / 落库）；否 -> 下一步
-  4) 群是否已绑定且已启用？—— 否 -> 静默不回复；是 -> 业务分支
-     （打卡 / 总结 / 报数 / 导出 / 帮助文案）
+  4) 群是否已绑定且已启用？—— 否 -> **回固定引导话术**（未绑定=请管理员
+     发「@机器人 绑定」；已停用=请后台启用）。⭐ 2026-10-19 起不再静默。
+     是 -> 下一步
+  5) 已绑定群：① 实名待输入会话（优先）② 暂停考核拦截 ③ 业务命令分派
+     （打卡 / 总结 / 报数 / 导出 / 实名 / 两轮总结 / 帮助文案）
 
 ⛔ 为什么第 3 步必须早于第 4 步：第二轮发的群名来自「尚未完成绑定」的群，
    一旦先做群授权判定，第二轮会被当成未绑定群的普通消息**静默吞掉**，
@@ -54,10 +57,12 @@ from ..backend.base import Backend
 from ..config import BotConfig
 from ..handlers import bind as bind_handler
 from ..handlers import checkin as checkin_handler
+from ..handlers import realname as realname_handler
 from ..handlers import report as report_handler
 from ..handlers import stats as stats_handler
 from ..handlers import summary as summary_handler
-from ..handlers.base import KIND_A, HandlerContext, token_record_from_row
+from ..handlers.base import (KIND_A, PAUSED_MEMBER_TEXT, HandlerContext,
+                             token_record_from_row)
 from ..router import Router
 from ..state import StateStore
 from ..web import uploads as uploads_mod
@@ -124,6 +129,8 @@ def build_router() -> Router:
     router.register(commands.CMD_REPORT, report_handler.handle_command)
     # 「导出」= 一键导出全部业务（2026-10-16 用户指令三.1）
     router.register(commands.CMD_EXPORT, stats_handler.handle_command)
+    # 「实名」= 两轮实名登记（2026-10-19 用户指令）
+    router.register(commands.CMD_REALNAME, realname_handler.handle_command)
     return router
 
 
@@ -295,15 +302,25 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
                              group_id=inbound.group_id)
             return {"ok": True, "replied": bool(bind_pending_reply)}
 
-        # 第 4 步：群是否已绑定且已启用？—— 否 -> 静默不回复（§4.7 群状态）
+        # 第 4 步：群绑定状态检查（⭐ 2026-10-19 用户指令：⛔ 不再静默）
+        # - 未绑定（无群配置）-> 统一引导管理员发「@机器人 绑定」
+        # - 已绑定但停用 -> 单独话术（⛔ 不能让用户误以为绑定就能救回）
+        # 两者都先落安全留痕，再回话；回推仍真实 @ 发送者。
         if not state.group_active(inbound.group_id):
             state.record_security_event(
                 "unauthorized_group", inbound.group_id, inbound.phone,
                 "group not bound or disabled")
-            LOG.info("callback from unbound/disabled group suppressed")
-            return {"ok": True, "replied": False}
+            bound_row = state.get_group_config(inbound.group_id)
+            reply = (bind_handler.UNBOUND_TEXT if bound_row is None
+                     else bind_handler.DISABLED_GROUP_TEXT)
+            if inbound.reply_url:
+                sender.reply(inbound.reply_url, reply,
+                             mention_phones=[inbound.phone],
+                             group_id=inbound.group_id)
+            return {"ok": True, "replied": True,
+                    "reason": "unbound" if bound_row is None else "disabled"}
 
-        # 第 5 步：业务分支（打卡 / 总结 / 报数 / 导出 / 帮助）
+        # 第 5 步：已绑定群的业务分支
         # 入站学习（§2.7 组合方案 C）
         state.learn_user(inbound.phone, inbound.name,
                          inbound.platform_user_id)
@@ -313,15 +330,39 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
                         inbound.reply_url, inbound.raw)
         reply: Optional[str] = None
         try:
-            if parsed.result == commands.RESULT_DISPATCH:
-                reply = router.dispatch(parsed, ctx)
-            elif parsed.result == commands.RESULT_UNKNOWN:
-                # 两轮总结优先于未知命令话术（§2.2）
-                reply = summary_handler.handle_pending_text(ctx)
-                if reply is None:
-                    reply = commands.reply_text(parsed)
+            # ---- 5.1 多轮会话：实名优先于总结（⛔ 两条会话不互相吞）----
+            if realname_handler.has_pending(ctx):
+                reply = realname_handler.handle_pending_text(ctx)
             else:
-                reply = commands.reply_text(parsed)
+                # ---- 5.2 暂停考核拦截（2026-10-19 用户口径）----
+                # 暂停 = 不能在群内执行业务操作（⛔ 不只是不再提醒）。
+                # 实名 / 导出 / 绑定 不属业务操作，不拦。
+                paused = state.is_member_paused(inbound.group_id,
+                                                inbound.phone)
+                business_cmd = parsed.command in (
+                    commands.CMD_CHECKIN, commands.CMD_SUMMARY,
+                    commands.CMD_REPORT)
+                summary_pending = state.get_pending_session(
+                    inbound.group_id, inbound.phone, summary_handler.BIZ,
+                    _now_dt()) is not None
+                if paused and (business_cmd
+                               or (parsed.result == commands.RESULT_UNKNOWN
+                                   and summary_pending)):
+                    # 清掉总结待输入会话：恢复考核后 ⛔ 不突然提交旧内容
+                    if summary_pending:
+                        state.drop_pending_session(
+                            inbound.group_id, inbound.phone,
+                            summary_handler.BIZ)
+                    reply = PAUSED_MEMBER_TEXT
+                elif parsed.result == commands.RESULT_DISPATCH:
+                    reply = router.dispatch(parsed, ctx)
+                elif parsed.result == commands.RESULT_UNKNOWN:
+                    # 两轮总结优先于未知命令话术（§2.2）
+                    reply = summary_handler.handle_pending_text(ctx)
+                    if reply is None:
+                        reply = commands.reply_text(parsed)
+                else:
+                    reply = commands.reply_text(parsed)
         except Exception:
             # ⛔ 不向用户暴露内部细节；安全事件落库，运维查 security_event
             state.record_security_event(

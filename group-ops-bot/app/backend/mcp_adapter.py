@@ -278,11 +278,12 @@ class McpSseAdapter(Backend):
     # ---------- Backend 接口 ----------
 
     def user_upsert(self, *, phone, name=None, platform_user_id=None,
-                    department=None, source="learned") -> dict:
+                    department=None, source="learned", group_id=None) -> dict:
         return self._call_tool("user.upsert", {
             "phone": phone, "name": name,
             "platform_user_id": platform_user_id,
-            "department": department, "source": source})
+            "department": department, "source": source,
+            "group_id": group_id})
 
     def user_get(self, *, phone) -> dict:
         return self._call_tool("user.get", {"phone": phone})

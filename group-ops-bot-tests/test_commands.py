@@ -120,19 +120,24 @@ class TestUnknownAndHelp:
         assert parse("帮助").result == RESULT_UNKNOWN
 
     def test_help_text_is_standard_2026_10_16(self):
-        """⭐ 帮助文案整体替换为用户给定的标准格式（⛔ 逐行锁定，防回退）。"""
+        """⭐ 帮助文案整体替换为用户给定的标准格式（⛔ 逐行锁定，防回退）。
+
+        2026-10-19 用户指令：新增「实名」一行（共 6 项命令）。
+        """
         expected = (
             "未识别该指令，可用命令如下：\n"
             "「打卡」每日按群配置的时间段打卡\n"
             "「总结」提交当日总结\n"
             "「报数」提交当日工作报数\n"
+            "「实名」录入个人姓名与手机号至本群\n"
             "「导出」一键导出全部业务的统计表（仅管理员可用）\n"
             "「绑定」将本群接入机器人（仅管理员可用）")
         assert commands.HELP_TEXT == expected
         assert commands.reply_text(parse("你好")) == expected
 
-    def test_help_text_lists_all_five_commands(self):
-        for word in ("「打卡」", "「总结」", "「报数」", "「导出」", "「绑定」"):
+    def test_help_text_lists_all_six_commands(self):
+        for word in ("「打卡」", "「总结」", "「报数」", "「实名」",
+                     "「导出」", "「绑定」"):
             assert word in commands.HELP_TEXT
 
 

@@ -49,6 +49,12 @@ function todayStr(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+function nowClockStr(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
 export const QuickBackfillModal: React.FC<QuickBackfillModalProps> = ({
   isOpen,
   onClose,
@@ -67,7 +73,7 @@ export const QuickBackfillModal: React.FC<QuickBackfillModalProps> = ({
   const [bizType, setBizType] = useState<BizType>('summary');
   const [backfillDate, setBackfillDate] = useState(defaultDate || todayStr());
   const [slotId, setSlotId] = useState<string>('');
-  const [checkinTime, setCheckinTime] = useState('09:00:00');
+  const [nowClock, setNowClock] = useState(nowClockStr());
   const [summaryText, setSummaryText] = useState('');
   const [metricCounts, setMetricCounts] = useState<Record<string, number>>({});
   const [fieldQuery, setFieldQuery] = useState('');
@@ -95,6 +101,14 @@ export const QuickBackfillModal: React.FC<QuickBackfillModalProps> = ({
     setSuccessNotice(null);
     setErrorText(null);
   }, [isOpen, target.memberId, target.bizType, defaultDate, members, slots]);
+
+  // 补录时间 = 提交时的实时时间（2026-10-19 用户指令：⛔ 不再让管理员手填）
+  useEffect(() => {
+    if (!isOpen) return;
+    setNowClock(nowClockStr());
+    const timer = window.setInterval(() => setNowClock(nowClockStr()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isOpen]);
 
   const selectedMember = members.find((m) => m.user_id === selectedId)
     || members[0];
@@ -148,7 +162,7 @@ export const QuickBackfillModal: React.FC<QuickBackfillModalProps> = ({
             date: backfillDate,
             session: slot.id,
             status: 'ADMIN_EDIT',
-            checkin_time: checkinTime,
+            // ⛔ 不传 checkin_time：由服务端记录实时时间（NOW）
           });
         }
       } else if (bizType === 'summary') {
@@ -440,18 +454,16 @@ export const QuickBackfillModal: React.FC<QuickBackfillModalProps> = ({
                 </div>
                 <div>
                   <label className="text-slate-600 block mb-1 font-semibold text-slate-700">
-                    管理员操作补录时间
+                    补录时间（实时）
                   </label>
-                  <input
-                    type="time"
-                    step="1"
-                    value={checkinTime}
-                    onChange={(e) => setCheckinTime(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl p-2 font-mono outline-none"
-                  />
+                  <div className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2 font-mono text-slate-700 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>{nowClock}</span>
+                  </div>
                 </div>
               </div>
               <div className="text-[11px] text-slate-500">
+                补录时间由系统在提交瞬间记录，⛔ 无需也无法手工修改；
                 凭据形式：免图直提（管理员补录按豁免机制直接入库）。
               </div>
             </div>

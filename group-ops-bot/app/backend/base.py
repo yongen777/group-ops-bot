@@ -33,7 +33,8 @@ class Backend(ABC):
     def user_upsert(self, *, phone: str, name: Optional[str],
                     platform_user_id: Optional[str],
                     department: Optional[str] = None,
-                    source: str = "learned") -> dict:
+                    source: str = "learned",
+                    group_id: Optional[str] = None) -> dict:
         """按手机号 upsert（幂等）。返回 {"user_id": int, "created": bool}。"""
 
     @abstractmethod

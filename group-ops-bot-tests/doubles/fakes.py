@@ -142,8 +142,9 @@ class FakeBackend:
             raise BackendError("fake backend unreachable: %s" % name)
 
     def user_upsert(self, *, phone, name=None, platform_user_id=None,
-                    department=None, source="learned"):
-        self._record("user_upsert", {"phone": phone})
+                    department=None, source="learned", group_id=None):
+        self._record("user_upsert", {"phone": phone, "name": name,
+                                     "group_id": group_id, "source": source})
         self._maybe_raise("user_upsert")
         self.next_user_id += 1
         return {"user_id": self.next_user_id, "created": True}

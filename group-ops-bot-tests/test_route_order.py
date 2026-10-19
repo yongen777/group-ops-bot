@@ -168,14 +168,15 @@ class TestBindTwoRoundOrder:
         assert tmp_db.get_group_config(UNBOUND) is None
 
     def test_pending_does_not_leak_to_other_sender(self, tmp_db):
-        """等待会话按「群 + 发送者」隔离：别人发文本不建群、不被吞。"""
+        """等待会话按「群 + 发送者」隔离：别人发文本不建群，只得到未绑定引导。"""
         client, sender = make_client(tmp_db)
         client.post("/api/callback", json=payload("绑定", UNBOUND))
         resp = client.post("/api/callback",
                            json=payload("别人的群名", UNBOUND,
                                         phone="22644212510"))
-        # 别人：未绑定群 + 无等待会话 -> 第 4 步静默
-        assert resp.json()["replied"] is False
+        # 别人：未绑定群 + 无等待会话 -> 统一引导话术（⛔ 不当群名）
+        assert resp.json()["replied"] is True
+        assert "本群尚未接入机器人" in sender.sent[-1]["text"]
         assert tmp_db.get_group_config(UNBOUND) is None
 
     def test_bound_group_business_still_works_after_rounds(self, tmp_db):
@@ -189,15 +190,16 @@ class TestBindTwoRoundOrder:
         assert "/h5/checkin#t=" in sender.sent[-1]["text"]
 
 
-# ---------- 第 4 步：未绑定群静默 ----------
+# ---------- 第 4 步：未绑定群回统一引导（⭐ 2026-10-19 起不再静默）----------
 
-class TestUnboundSilence:
-    def test_business_command_in_unbound_group_is_silent(self, tmp_db):
+class TestUnboundGuide:
+    def test_business_command_in_unbound_group_gets_guide(self, tmp_db):
         client, sender = make_client(tmp_db)
         resp = client.post("/api/callback",
                            json=payload("打卡", "G-ROUTE-OTHER"))
-        assert resp.json()["replied"] is False
-        assert sender.sent == []
+        assert resp.json()["replied"] is True
+        assert len(sender.sent) == 1
+        assert "本群尚未接入机器人" in sender.sent[-1]["text"]
         events = tmp_db._conn.execute(
             "SELECT * FROM security_event WHERE event_type="
             "'unauthorized_group'").fetchall()

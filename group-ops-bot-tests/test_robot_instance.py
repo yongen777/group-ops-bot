@@ -340,12 +340,12 @@ class TestCallbackAutoDiscoveryAndNaming:
         client, sender = _callback_app(tmp_db)
         resp = _post_callback(client, INST_GROUP, "帮助")
         assert resp.status_code == 200
-        assert resp.json() == {"ok": True, "replied": False}  # 未绑定群静默
+        # ⭐ 2026-10-19：未绑定群回统一引导（⛔ 不再静默）
+        assert resp.json()["replied"] is True
+        assert "本群尚未接入机器人" in sender.sent[-1]["text"]
         # T0 已登记 WAIT_BIND（group_seen 之外新增实例行）
         row = tmp_db.get_robot_instance(INST_GROUP)
         assert row is not None and row["status"] == "WAIT_BIND"
-        # 未绑定群⛔ 不出站
-        assert sender.sent == []
 
     def test_ensure_failure_does_not_break_callback(self, tmp_db,
                                                     monkeypatch):
@@ -374,16 +374,17 @@ class TestCallbackAutoDiscoveryAndNaming:
         assert cfg is not None
         assert cfg["group_name"] == "我的群名"
 
-    def test_bind_colon_form_in_unbound_group_is_silent(self, tmp_db):
-        """⭐ 2026-10-17 用户指令一：「绑定: 群名」在未绑定群 = 无关文本。
+    def test_bind_colon_form_in_unbound_group_gets_guide(self, tmp_db):
+        """⭐ 2026-10-17：「绑定: 群名」= 无关文本（⛔ 不建群）。
 
-        命令层判 unknown -> 授权前的绑定分支不命中 -> 落入静默分支：
-        ⛔ 不建群、不回复、不留任何命名事件（旧路径已移除）。
+        ⭐ 2026-10-19：该文本在未绑定群 -> 回统一引导话术（⛔ 不再静默）；
+        仍不建群、不产生命名事件。
         """
         client, sender = _callback_app(tmp_db)
         resp = _post_callback(client, INST_GROUP, "绑定: 华东巡检群")
         assert resp.status_code == 200
-        assert resp.json() == {"ok": True, "replied": False}
+        assert resp.json()["replied"] is True
+        assert "本群尚未接入机器人" in sender.sent[-1]["text"]
         assert tmp_db.get_group_config(INST_GROUP) is None
         row = tmp_db.get_robot_instance(INST_GROUP)
         assert row["display_name"] is None
@@ -397,9 +398,10 @@ class TestCallbackAutoDiscoveryAndNaming:
         tmp_db.ensure_robot_instance(INST_GROUP)
         tmp_db.bind_robot_instance(INST_GROUP, "https://bot.example.com/hook")
         client, sender = _callback_app(tmp_db)
-        # 实例 ACTIVE 但群未授权（无 group_config）-> 回调静默抑制
+        # 实例 ACTIVE 但群未授权（无 group_config）-> 回未绑定引导（⛔ 不跑业务）
         resp = _post_callback(client, INST_GROUP, "打卡")
-        assert resp.json() == {"ok": True, "replied": False}
+        assert resp.json()["replied"] is True
+        assert "本群尚未接入机器人" in sender.sent[-1]["text"]
         # 群授权 + 业务开 + 实例 DISABLED -> 业务照常处理、回推照常
         tmp_db.create_group(INST_GROUP, "授权群")
         tmp_db.upsert_group_config(

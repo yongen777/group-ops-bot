@@ -24,18 +24,7 @@ import type {
   ReportField,
 } from '../../lib/types';
 import { GroupSwitcher } from './GroupSwitcher';
-
-const ROLE_OPTIONS = ['开发', '测试', '产品', '设计师', '运维', '销售', '项目管理'];
-
-const ROLE_LABEL: Record<string, string> = {
-  开发: '开发研发',
-  测试: '测试质检',
-  产品: '产品经理',
-  设计师: 'UI/UX 设计师',
-  运维: '运维支持',
-  销售: '销售商务',
-  项目管理: '项目管理',
-};
+import { ROLE_LABEL, ROLE_OPTIONS } from '../../lib/roles';
 
 const BIZ_SWITCHES = [
   { key: 'checkin' as const, title: '考勤打卡', desc: '上下班考勤打卡与凭据记录' },
@@ -218,6 +207,7 @@ export const GroupManagement: React.FC = () => {
   const [newRole, setNewRole] = useState('开发');
   const [memberError, setMemberError] = useState<string | null>(null);
   const [editingMember, setEditingMember] = useState<GroupMember | null>(null);
+  const [editPhone, setEditPhone] = useState('');
   const [deletingMember, setDeletingMember] = useState<GroupMember | null>(null);
 
   const filteredMembers = useMemo(() => {
@@ -287,15 +277,29 @@ export const GroupManagement: React.FC = () => {
       showToast('真实姓名不能为空', 'error');
       return;
     }
+    const nextPhone = editPhone.trim();
+    if (!/^[0-9A-Za-z_-]{4,32}$/.test(nextPhone)) {
+      showToast('手机号码需为 4~32 位数字/字母', 'error');
+      return;
+    }
     try {
-      await api.put(
+      // ⚠️ 改手机号只改名单配置（+跟着人走的导出授权），
+      //    历史业务记录仍挂在旧号码上，不会跟着改
+      const result = await api.put<{ ok: boolean; user_id: string }>(
         `/api/admin/groups/${gid(selectedGroupId)}/members/${gid(editingMember.user_id)}`,
-        { nickname: editingMember.nickname.trim(), role: editingMember.role },
+        {
+          nickname: editingMember.nickname.trim(),
+          role: editingMember.role,
+          new_user_id: nextPhone,
+        },
       );
       setEditingMember(null);
       await loadMembers();
       await loadGrants();
-      showToast('成员信息已成功更新');
+      const renamed = result.user_id !== editingMember.user_id;
+      showToast(renamed
+        ? `成员信息已更新（手机号改为 ${result.user_id}）；历史业务记录仍按旧号码留存`
+        : '成员信息已成功更新');
     } catch (err: any) {
       showToast(err?.message || '保存未成功', 'error');
     }
@@ -1112,7 +1116,10 @@ export const GroupManagement: React.FC = () => {
                         <td className="py-3 px-4 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
-                              onClick={() => setEditingMember({ ...m })}
+                              onClick={() => {
+                                setEditingMember({ ...m });
+                                setEditPhone(m.user_id);
+                              }}
                               className="px-2 py-1 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer text-xs"
                             >
                               编辑
@@ -1444,13 +1451,19 @@ export const GroupManagement: React.FC = () => {
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">手机号码 (唯一ID)</label>
+                <label className="font-semibold text-slate-700 block mb-1">
+                  手机号码 (唯一ID) <span className="text-[10px] text-slate-400">可修改</span>
+                </label>
                 <input
                   type="text"
-                  disabled
-                  value={editingMember.user_id}
-                  className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 font-mono text-slate-500 cursor-not-allowed"
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  placeholder="4~32 位数字/字母"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono text-slate-800 outline-none focus:bg-white focus:border-blue-500"
                 />
+                <p className="text-[10px] text-amber-700 mt-1">
+                  改号只影响名单与授权；历史业务记录仍挂在旧号码下，不会迁移。
+                </p>
               </div>
 
               <div>

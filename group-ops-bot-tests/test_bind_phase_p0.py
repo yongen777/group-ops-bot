@@ -208,10 +208,10 @@ class TestDiscoveredAndBackendBind:
     def test_unbound_group_recorded_then_bindable(self, tmp_db, monkeypatch):
         """未绑定群回调 -> group_seen 记账 -> 后台列表可见 -> 一键绑定。"""
         client, _sender = make_callback_app(tmp_db)
-        # 未绑定群发业务命令：静默（不回复），但已记账
+        # 未绑定群发业务命令：回统一引导（⭐ 2026-10-19 起不再静默），且已记账
         resp = client.post("/api/callback",
                            json=callback_payload("打卡", NEW_GROUP))
-        assert resp.json()["replied"] is False
+        assert resp.json()["replied"] is True
         seen = tmp_db._conn.execute(
             "SELECT * FROM group_seen WHERE group_id=?", (NEW_GROUP,)).fetchall()
         assert len(seen) == 1 and seen[0]["msg_count"] == 1
@@ -289,7 +289,7 @@ class TestDiscoveredAndBackendBind:
 
 class TestIsolationAfterBind:
     def test_bound_group_runs_business_other_stays_silent(self, tmp_db):
-        """绑定 + 后台开业务 -> 本群打卡正常；未绑定群仍静默。"""
+        """绑定 + 后台开业务 -> 本群打卡正常；未绑定群只回引导不跑业务。"""
         backend = FakeBackend()
         bind_via_chat(tmp_db, backend)
         # 绑定只接入不开业务：管理员在后台开五业务 + 配覆盖 10:00 的打卡区间
@@ -308,10 +308,11 @@ class TestIsolationAfterBind:
                            json=callback_payload("打卡", NEW_GROUP))
         assert resp.json()["replied"] is True
         assert "/h5/checkin#t=" in sender.sent[-1]["text"]
-        # 未绑定群：静默 + unauthorized_group 留痕
+        # 未绑定群：统一引导 + unauthorized_group 留痕（⛔ 不跑业务）
         resp = client.post("/api/callback",
                            json=callback_payload("打卡", OTHER_GROUP))
-        assert resp.json()["replied"] is False
+        assert resp.json()["replied"] is True
+        assert "本群尚未接入机器人" in sender.sent[-1]["text"]
         events = security_events(tmp_db, "unauthorized_group")
         assert any(e["group_id"] == OTHER_GROUP for e in events)
         # ⛔ 未给 OTHER_GROUP 建任何配置

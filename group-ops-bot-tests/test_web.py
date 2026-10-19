@@ -48,14 +48,19 @@ def extract_token(sent_text):
 
 
 class TestCallback:
-    def test_unbound_group_suppressed(self, tmp_db):
+    def test_unbound_group_gets_bind_guide(self, tmp_db):
+        """⭐ 2026-10-19 用户指令：未绑定群不再静默，统一引导管理员绑定。"""
         app, backend, sender = make_app(tmp_db)
         client = TestClient(app)
         resp = client.post("/api/callback",
                            json=callback_payload("打卡", group_id="G999"))
         assert resp.status_code == 200
-        assert resp.json()["replied"] is False
-        assert sender.sent == []  # ⛔ 未授权群不回复
+        assert resp.json()["replied"] is True
+        assert len(sender.sent) == 1
+        assert "本群尚未接入机器人" in sender.sent[0]["text"]
+        assert "「@general-bot 绑定」" in sender.sent[0]["text"]
+        # 回推真实 @ 发送者（⛔ 不靠正文假装 @）
+        assert sender.sent[0]["mention_phones"] == [PHONE]
         events = tmp_db._conn.execute(
             "SELECT * FROM security_event WHERE event_type='unauthorized_group'"
         ).fetchall()

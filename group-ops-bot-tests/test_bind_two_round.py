@@ -112,6 +112,7 @@ class TestRoundTwo:
             "「打卡」每日按群配置的时间段打卡\n"
             "「总结」提交当日总结\n"
             "「报数」提交当日工作报数\n"
+            "「实名」录入个人姓名与手机号至本群\n"
             "「导出」一键导出全部业务的统计表（仅管理员可用）")
         assert reply.endswith(expected_guide)
         # ⛔ 不重复列「绑定」
@@ -261,15 +262,19 @@ class TestTwoRoundViaCallback:
         assert tmp_db.get_group_config(NEW_GROUP)["group_name"] == "我的测试群"
 
     def test_callback_round_two_ignores_other_user(self, tmp_db):
-        """⛔ 别人在等待期发文本不当群名（等待态按手机号绑定）。"""
-        client, _sender = self._callback_app(tmp_db)
+        """⛔ 别人在等待期发文本不当群名（等待态按手机号绑定）。
+
+        ⭐ 2026-10-19：该群仍未绑定 -> 回统一引导话术（⛔ 不再静默）。
+        """
+        client, sender = self._callback_app(tmp_db)
         client.post("/api/callback",
                     json=callback_payload("绑定", NEW_GROUP,
                                           phone=ADMIN_PHONE))
         resp = client.post("/api/callback",
                            json=callback_payload("冒名群", NEW_GROUP,
                                                  phone=OTHER_PHONE))
-        assert resp.json()["replied"] is False
+        assert resp.json()["replied"] is True
+        assert "尚未接入机器人" in sender.sent[-1]["text"]
         assert tmp_db.get_group_config(NEW_GROUP) is None
 
     def test_callback_round_two_outside_slot_command_not_swallowed(self, tmp_db):

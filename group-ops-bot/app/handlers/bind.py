@@ -32,7 +32,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .. import commands
-from .base import HandlerContext
+from .base import BOT_MENTION_NAME, HandlerContext
 
 BIZ = "bind"
 
@@ -48,7 +48,17 @@ BOUND_COMMANDS_GUIDE = ("可用命令如下：\n"
                         "「打卡」每日按群配置的时间段打卡\n"
                         "「总结」提交当日总结\n"
                         "「报数」提交当日工作报数\n"
+                        "「实名」录入个人姓名与手机号至本群\n"
                         "「导出」一键导出全部业务的统计表（仅管理员可用）")
+
+# ⭐ 未绑定群统一引导（2026-10-19 用户指令：⛔ 不再静默）
+# 正文里的 @机器人名 由 base.BOT_MENTION_NAME 单一真源注入；回推由
+# sender 另外按 mention_phones 真正 @ 发送者（⛔ 不靠正文假装 @）。
+UNBOUND_TEXT = ("本群尚未接入机器人，请群管理员发送「@%s 绑定」"
+                "完成配置后再使用。" % BOT_MENTION_NAME)
+# 已绑定但被停用：与「未绑定」区分（⛔ 不能骗用户去绑定，绑定也救不回停用群）
+DISABLED_GROUP_TEXT = ("本群机器人已停用，请联系群管理员在管理后台"
+                       "将群状态改为启用后再使用。")
 
 
 def bound_text(group_id: str) -> str:

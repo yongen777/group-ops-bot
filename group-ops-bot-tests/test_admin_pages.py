@@ -467,27 +467,19 @@ class TestStatsExport:
         assert "filename*=UTF-8''" in cd
         assert ".csv" in cd
 
-    def test_export_xlsx(self, tmp_db, tmp_path, monkeypatch):
+    def test_export_xlsx_removed(self, tmp_db, tmp_path, monkeypatch):
+        """⭐ 2026-10-19 用户指令：Excel 导出能力已移除，只保留 CSV。
+
+        ⛔ 不静默降级成 CSV 冒充：明确 400 + 说明。
+        """
         backend = FakeBackend()
         backend.results["checkin_query_records"] = self._records()
         client = self._client(tmp_db, tmp_path, monkeypatch, backend)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "biz": "checkin",
                                "date": "2026-10-15", "format": "xlsx"})
-        assert r.status_code == 200
-        assert r.headers["content-type"].startswith(
-            "application/vnd.openxmlformats")
-        import openpyxl
-        workbook = openpyxl.load_workbook(io.BytesIO(r.content))
-        sheet = workbook.active
-        assert sheet.title == "打卡"
-        header = [cell.value for cell in sheet[1]]
-        assert header[:3] == ["手机号", "姓名", "时段"]
-        rows = list(sheet.iter_rows(min_row=2, values_only=True))
-        assert rows[0][0] == PHONE
-        assert rows[0][1] == "张三"
-        assert rows[0][2] == "上午"
-        assert ".xlsx" in r.headers["content-disposition"]
+        assert r.status_code == 400
+        assert "仅支持 CSV" in r.json()["detail"]
 
     def test_export_summary_uses_group_period(self, tmp_db, tmp_path,
                                               monkeypatch):
@@ -541,17 +533,16 @@ class TestStatsExport:
         assert "张三" in body and "完成联调" in body and "bug修复数" in body
         assert "全天全部业务执行清单" in unquote_cd(r)
 
-    def test_export_all_xlsx_three_sheets(self, tmp_db, tmp_path, monkeypatch):
+    def test_export_all_xlsx_rejected(self, tmp_db, tmp_path, monkeypatch):
+        """全量导出同样只支持 CSV（⛔ 三 sheet 工作簿已下线）。"""
         backend = FakeBackend()
         backend.results["checkin_query_records"] = self._records()
         client = self._client(tmp_db, tmp_path, monkeypatch, backend)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "date": "2026-10-15",
                                "scope": "all", "format": "xlsx"})
-        assert r.status_code == 200, r.text
-        import openpyxl
-        workbook = openpyxl.load_workbook(io.BytesIO(r.content))
-        assert workbook.sheetnames == ["打卡", "总结", "报数"]
+        assert r.status_code == 400
+        assert "仅支持 CSV" in r.json()["detail"]
 
     def test_export_all_unknown_biz_503(self, tmp_db, tmp_path, monkeypatch):
         """部分业务查不到 -> 503；⛔ 不出半张空表冒充成功。"""

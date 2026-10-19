@@ -112,7 +112,9 @@ def _summary_cell(rec) -> dict:
     content = str(rec.get("content") or "")
     return {"content": content,
             "words": len(content),
-            "at": str(rec.get("updated_time") or rec.get("created_time") or ""),
+            # 2026-10-19 用户指令：总结/报数时间格式与打卡统一（HH:MM:SS），
+            # ⛔ 不再把后端 ISO 原样丢给前端
+            "at": _clock(rec.get("updated_time") or rec.get("created_time")),
             "entry_source": str(rec.get("entry_source") or ""),
             "period_type": str(rec.get("period_type") or "")}
 
@@ -132,7 +134,7 @@ def _report_cell(rec) -> dict:
                       "quantity": item.get("quantity")})
     return {"items": items,
             "total": int(total) if float(total).is_integer() else total,
-            "at": str(rec.get("created_time") or rec.get("updated_time") or ""),
+            "at": _clock(rec.get("created_time") or rec.get("updated_time")),
             "entry_source": str(rec.get("entry_source") or "")}
 
 

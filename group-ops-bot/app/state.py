@@ -827,6 +827,18 @@ class StateStore:
             return None
         return row
 
+    def peek_pending_session(self, group_id: str, user_id: str,
+                             biz: str) -> Optional[sqlite3.Row]:
+        """只读查看会话行（**不判过期、不删除**）。
+
+        用途：路由层判断「是否有刚过期未消费的会话」—— 必须只看不删，
+        删除权仍独家归 ``get_expired_pending_session``（否则超时话术
+        永远取不到行，2026-10-17 踩过的坑）。
+        """
+        return self._conn.execute(
+            "SELECT * FROM pending_session WHERE scope_key=?",
+            ("%s|%s|%s" % (group_id, user_id, biz),)).fetchone()
+
     def drop_pending_session(self, group_id: str, user_id: str, biz: str) -> None:
         self._conn.execute(
             "DELETE FROM pending_session WHERE scope_key=?",
@@ -1122,6 +1134,44 @@ class StateStore:
             sql += " AND enabled=1"
         sql += " ORDER BY user_id"
         return self._conn.execute(sql, params).fetchall()
+
+    def get_member_task(self, group_id: str,
+                        user_id: str) -> Optional[sqlite3.Row]:
+        """取单个应交成员配置行（⛔ 不含业务记录）。"""
+        return self._conn.execute(
+            "SELECT * FROM group_member_task_config"
+            " WHERE group_id=? AND user_id=?", (group_id, user_id)).fetchone()
+
+    def is_member_paused(self, group_id: str, user_id: str) -> bool:
+        """是否被「暂停考核」（enabled=0）。
+
+        2026-10-19 用户口径：暂停考核 = 该成员在群内**不能执行业务操作**
+        （打卡 / 总结 / 报数），不只是不再提醒。⛔ 不在名单里不当成暂停
+        （名单外的人仍可提交，提交后由后台「一键添加」补录名单）。
+        """
+        row = self.get_member_task(group_id, user_id)
+        if row is None:
+            return False
+        try:
+            return not bool(row["enabled"])
+        except (IndexError, KeyError):  # pragma: no cover - 旧库缺列
+            return False
+
+    def rename_member_task(self, group_id: str, old_user_id: str,
+                           new_user_id: str) -> None:
+        """改成员唯一标识（手机号）。⛔ 只改配置行，历史业务记录不动。"""
+        if old_user_id == new_user_id:
+            return
+        self._conn.execute(
+            "UPDATE group_member_task_config SET user_id=?, updated_at=?"
+            " WHERE group_id=? AND user_id=?",
+            (new_user_id, utcnow_iso(), group_id, old_user_id))
+        # 白名单授权跟着人走（成员唯一标识变了，授权不能失联）
+        self._conn.execute(
+            "UPDATE export_whitelist SET user_id=?, updated_at=?"
+            " WHERE group_id=? AND user_id=?",
+            (new_user_id, utcnow_iso(), group_id, old_user_id))
+        self._conn.commit()
 
     def upsert_field(self, group_id: str, field_id: int, field_name: str,
                      unit: Optional[str], roles: list, enabled: bool,

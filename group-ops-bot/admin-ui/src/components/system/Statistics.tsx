@@ -16,7 +16,6 @@ import type { Board, BoardMember, CellStatus } from '../../lib/types';
 import { GroupSwitcher } from './GroupSwitcher';
 
 type ExportType = 'all' | 'checkin' | 'summary' | 'report';
-type ExportFormat = 'csv' | 'xlsx';
 
 interface ExportModalState {
   type: ExportType;
@@ -63,7 +62,6 @@ export const Statistics: React.FC = () => {
 
   const [toast, setToast] = useState<string | null>(null);
   const [exportModal, setExportModal] = useState<ExportModalState | null>(null);
-  const [exportFormat, setExportFormat] = useState<ExportFormat>('csv');
   const [exportRemark, setExportRemark] = useState('');
   const [exporting, setExporting] = useState(false);
 
@@ -140,12 +138,12 @@ export const Statistics: React.FC = () => {
 
   const openExport = (type: ExportType, title: string) => {
     const biz = type === 'all' ? 'checkin' : type;
-    setExportFormat('csv');
     setExportRemark(`${date} ${title}归档`);
     setExportModal({ type, title, biz, scope: type === 'all' ? 'all' : 'single' });
   };
 
-  /** 导出：走服务端生成文件（不受当前页面筛选影响，按该群当日全量记录生成） */
+  /** 导出：走服务端生成文件（不受当前页面筛选影响，按该群当日全量记录生成）
+   *  2026-10-19 用户指令：只保留 CSV，Excel 能力已移除 */
   const executeExport = async () => {
     if (!exportModal || !board) return;
     setExporting(true);
@@ -155,7 +153,7 @@ export const Statistics: React.FC = () => {
         date,
         biz: exportModal.biz,
         scope: exportModal.scope,
-        format: exportFormat,
+        format: 'csv',
         remark: exportRemark.trim(),
       })}`;
       const link = document.createElement('a');
@@ -165,7 +163,7 @@ export const Statistics: React.FC = () => {
       link.click();
       document.body.removeChild(link);
       setExportModal(null);
-      showToast(`已生成【${exportModal.title}】${exportFormat === 'csv' ? 'CSV 表格' : 'Excel 工作簿'}，请查看下载文件`);
+      showToast(`已生成【${exportModal.title}】CSV 表格，请查看下载文件`);
     } catch (err) {
       showToast(err instanceof Error ? plainError(err.message) : '导出未成功，请稍后重试');
     } finally {
@@ -378,6 +376,7 @@ export const Statistics: React.FC = () => {
 
                 {(bizViewFilter === 'all' || bizViewFilter === 'summary') && (
                   <>
+                    <th className="py-2.5 px-3">总结完成时间</th>
                     <th className="py-2.5 px-3">今日总结</th>
                     <th className="py-2.5 px-3">字数汇报</th>
                   </>
@@ -385,6 +384,7 @@ export const Statistics: React.FC = () => {
 
                 {(bizViewFilter === 'all' || bizViewFilter === 'report') && (
                   <>
+                    <th className="py-2.5 px-3">报数完成时间</th>
                     <th className="py-2.5 px-3">今日报数指标</th>
                     <th className="py-2.5 px-3">指标汇总</th>
                   </>
@@ -457,6 +457,9 @@ export const Statistics: React.FC = () => {
 
                       {(bizViewFilter === 'all' || bizViewFilter === 'summary') && (
                         <>
+                          <td className="py-3 px-3 whitespace-nowrap font-mono font-semibold text-slate-800">
+                            {m.summary?.at || <span className="text-slate-400">—</span>}
+                          </td>
                           <td
                             className="py-3 px-3 max-w-[190px] truncate"
                             title={m.summary?.content || ''}
@@ -481,6 +484,9 @@ export const Statistics: React.FC = () => {
 
                       {(bizViewFilter === 'all' || bizViewFilter === 'report') && (
                         <>
+                          <td className="py-3 px-3 whitespace-nowrap font-mono font-semibold text-slate-800">
+                            {m.report?.at || <span className="text-slate-400">—</span>}
+                          </td>
                           <td className="py-3 px-3 max-w-[200px]" title={reportText}>
                             {m.report ? (
                               <span className="block truncate font-mono text-[11px] text-slate-700 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
@@ -525,15 +531,7 @@ export const Statistics: React.FC = () => {
             </span>
             <span className="text-emerald-700 font-bold">已就绪合规导出</span>
           </div>
-
-          <button
-            onClick={() => openExport('all', '全天全部业务执行清单')}
-            disabled={!board}
-            className="text-blue-600 hover:text-blue-800 font-bold cursor-pointer flex items-center gap-1 disabled:opacity-50"
-          >
-            <Download className="w-3 h-3" />
-            <span>导出全量 CSV 报表</span>
-          </button>
+          <span className="text-slate-400">导出统一为 CSV（Excel 导出已下线）</span>
         </div>
       </div>
 
@@ -587,28 +585,7 @@ export const Statistics: React.FC = () => {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-500">文件格式：</span>
-                <div className="flex items-center p-0.5 bg-slate-100 rounded-lg">
-                  <button
-                    onClick={() => setExportFormat('csv')}
-                    className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
-                      exportFormat === 'csv'
-                        ? 'bg-white text-blue-700 shadow-2xs'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    CSV
-                  </button>
-                  <button
-                    onClick={() => setExportFormat('xlsx')}
-                    className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
-                      exportFormat === 'xlsx'
-                        ? 'bg-white text-blue-700 shadow-2xs'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    Excel
-                  </button>
-                </div>
+                <span className="font-mono font-bold text-slate-900">CSV 表格</span>
               </div>
             </div>
 

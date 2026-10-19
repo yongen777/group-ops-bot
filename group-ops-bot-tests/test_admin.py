@@ -434,6 +434,39 @@ class TestMemberAdmin:
                       {"enabled": False})
         assert resp.status_code == 404
 
+    def test_member_phone_can_be_edited(self, tmp_db, monkeypatch):
+        """⭐ 2026-10-19 用户指令：群成员编辑可修改手机号（唯一标识）。"""
+        client = self._client(tmp_db, monkeypatch)
+        mutate(client, "POST", "/api/admin/groups/%s/members" % GROUP,
+               {"user_id": PHONE, "nickname": "张三", "role": "开发"})
+        # 先把授权挂在旧手机号上，改号后必须跟着走（⛔ 不失联）
+        tmp_db.upsert_whitelist(GROUP, PHONE, "ADMIN_ALL")
+        new_phone = "13800000009"
+        resp = mutate(client, "PUT",
+                      "/api/admin/groups/%s/members/%s" % (GROUP, PHONE),
+                      {"nickname": "张三丰", "role": "测试",
+                       "new_user_id": new_phone})
+        assert resp.status_code == 200
+        assert resp.json()["user_id"] == new_phone
+        members = client.get(
+            "/api/admin/groups/%s/members" % GROUP).json()["members"]
+        assert [m["user_id"] for m in members] == [new_phone]
+        assert members[0]["nickname"] == "张三丰"
+        assert members[0]["role"] == "测试"
+        assert [r["user_id"] for r in tmp_db.list_whitelist(GROUP)] == \
+            [new_phone]
+
+    def test_member_phone_conflict_409(self, tmp_db, monkeypatch):
+        client = self._client(tmp_db, monkeypatch)
+        mutate(client, "POST", "/api/admin/groups/%s/members" % GROUP,
+               {"user_id": PHONE, "nickname": "张三", "role": "开发"})
+        mutate(client, "POST", "/api/admin/groups/%s/members" % GROUP,
+               {"user_id": "13800000009", "nickname": "李四", "role": "开发"})
+        resp = mutate(client, "PUT",
+                      "/api/admin/groups/%s/members/%s" % (GROUP, PHONE),
+                      {"new_user_id": "13800000009"})
+        assert resp.status_code == 409
+
 
 # ---------- API：导出白名单（2026-10-19 单权化 + 限群成员） ----------
 
@@ -602,7 +635,8 @@ class TestAudit:
 # ---------- 与 :18002 联动：群停用抑制回调 ----------
 
 class TestDisabledGroupSuppression:
-    def test_disabled_group_suppressed(self, tmp_db):
+    def test_disabled_group_replies_disabled_text(self, tmp_db):
+        """⭐ 2026-10-19 起停用群不再静默：回「已停用」固定话术且不跑业务。"""
         from app.web.server import create_app
         enable_all(tmp_db)
         tmp_db.upsert_group_config(GROUP, status="disabled")
@@ -616,4 +650,5 @@ class TestDisabledGroupSuppression:
             "group_id": GROUP, "phone": PHONE, "text": "打卡",
             "reply_url": "http://reply.test/hook"})
         assert resp.status_code == 200
-        assert resp.json()["replied"] is False  # 停用群按未绑定处理
+        assert resp.json()["replied"] is True
+        assert resp.json()["reason"] == "disabled"

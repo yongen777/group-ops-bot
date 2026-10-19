@@ -274,8 +274,8 @@ class TestCallbackBindExpiryEndToEnd:
         # ⛔ 超时走完不建群
         assert tmp_db.get_group_config(NEW_GROUP) is None
 
-    def test_expired_bind_command_falls_through_silent(self, tmp_db):
-        """过期期发业务命令 -> 超时话术不吞命令；未绑定群照旧静默。"""
+    def test_expired_bind_command_falls_through_to_unbound_guide(self, tmp_db):
+        """过期期发业务命令 -> 超时话术不吞命令；未绑定群回统一引导。"""
         sender = RecordingSender()
         clock = {"now": NOW}
         app = create_app(
@@ -291,5 +291,8 @@ class TestCallbackBindExpiryEndToEnd:
         resp = client.post("/api/callback",
                            json=callback_payload("打卡", NEW_GROUP,
                                                  phone=ADMIN_PHONE))
-        assert resp.json()["replied"] is False
+        assert resp.json()["replied"] is True
+        text = sender.sent[-1]["text"]
+        assert "本群尚未接入机器人" in text
+        assert "超时" not in text  # ⛔ 不被绑定超时话术吞掉
         assert tmp_db.get_group_config(NEW_GROUP) is None

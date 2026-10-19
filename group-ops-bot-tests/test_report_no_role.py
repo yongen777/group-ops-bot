@@ -125,7 +125,7 @@ class TestDynamicAddUi:
         src = (Path(app.__file__).parent.parent / "admin-ui" / "src" /
                "components" / "system" / "GroupManagement.tsx"
                ).read_text(encoding="utf-8")
-        assert "roles" not in src  # 字段池新增只送 名称 / 单位
+        assert "roles:" not in src  # 字段池新增只送 名称 / 单位
         assert "field_name" in src
 
 
