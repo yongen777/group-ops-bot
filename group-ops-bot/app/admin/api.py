@@ -75,11 +75,15 @@ def _normalize_clock(value, date_str: str) -> Optional[str]:
     return "%s %02d:%02d:%02d" % (date_str, hour, minute, second)
 
 
-def _resolve_period_from_body(group_id: str, body: dict, biz: str) -> str:
+def _resolve_period_from_body(state: StateStore, group_id: str, body: dict,
+                              biz: str) -> str:
     """请求体 -> 周期键（2026-10-19：补录改按「日期」提交）。
 
     优先 date（YYYY-MM-DD）；兼容旧调用方的 period_key。
     总结按群配置的周期类型折算（日报=当天，周报=所在 ISO 周）。
+
+    ⚠️ state 必须显式传入：本函数是模块级函数，早期版本直接引用
+    create_admin_router 闭包里的 state，date 路径必炸（2026-10-19 修复）。
     """
     date_str = body.get("date")
     if isinstance(date_str, str) and date_str.strip():
@@ -798,7 +802,7 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_csrf(request, identity)
         _group_row(state, group_id)
         user_id = _clean_str(body.get("user_id"), "用户标识", 32)
-        period_key = _resolve_period_from_body(group_id, body, "checkin")
+        period_key = _resolve_period_from_body(state, group_id, body, "checkin")
         session = body.get("session")
         # 多时间段后：session 必须是本群已配置的区间 id（⛔ 不再是固定 am/pm）
         from ..handlers import checkin as checkin_handler
@@ -869,7 +873,7 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_csrf(request, identity)
         _group_row(state, group_id)
         user_id = _clean_str(body.get("user_id"), "用户标识", 32)
-        period_key = _resolve_period_from_body(group_id, body, "report")
+        period_key = _resolve_period_from_body(state, group_id, body, "report")
         role = body.get("role")
         if not isinstance(role, str) or not role.strip():
             raise HTTPException(status_code=400, detail="角色不能为空")
@@ -887,6 +891,152 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                                 detail=result.message or "补录被拒绝")
         return {"ok": True, "message": "报数补录成功",
                 "record_id": result.record_id}
+
+    # ---------- 管理员修改既有记录（D17，2026-10-19） ----------
+
+    def _require_reason(body: dict) -> tuple:
+        """修改事由必填 + 入库备注可选（用户指令：必填修改事由 + 入库备注）。"""
+        reason = _clean_str(body.get("reason"), "修改事由", 200)
+        remark = _clean_str(body.get("remark"), "入库备注", 500,
+                            required=False)
+        return reason, remark
+
+    def _numeric_user_id(phone: str) -> int:
+        """手机号 -> MySQL 数字人员 id；无档案时明确拒绝（⛔ 不隐式建档）。"""
+        result = backend.user_get(phone=phone) or {}
+        user = result.get("user") or {}
+        if not user.get("id"):
+            raise HTTPException(
+                status_code=400,
+                detail="该成员还没有业务档案，无法修改记录，请先补录一次")
+        return int(user["id"])
+
+    @router.post("/groups/{group_id}/records/{biz}/edit")
+    def edit_record(group_id: str, biz: str, body: dict = Body(...),
+                    request: Request = None):
+        """修改已有业务记录（打卡时间/状态、总结正文/时间、报数各字段数值）。
+
+        - ⛔ 只改已有行，不插入：没有记录时返回 409 并提示走补录
+        - 必填修改事由（reason）+ 可选入库备注（remark），一并落审计
+        - 保存后前端重新拉看板，✅ 不做本地乐观更新（以库为准）
+        """
+        identity = _identity(request, state)
+        _require_password_changed(identity)
+        _require_csrf(request, identity)
+        if biz not in ("checkin", "summary", "report"):
+            raise HTTPException(status_code=400,
+                                detail="业务类型只能是 checkin / summary / report")
+        _group_row(state, group_id)
+        phone = _clean_str(body.get("user_id"), "用户标识", 32)
+        reason, remark = _require_reason(body)
+        period_key = _resolve_period_from_body(state, group_id, body, biz)
+        date_str = _body_date(body)
+        uid = _numeric_user_id(phone)
+
+        changed = 0
+        if biz == "checkin":
+            slots = body.get("slots")
+            if not isinstance(slots, list) or not slots:
+                raise HTTPException(status_code=400,
+                                    detail="请至少提供一个时间段的修改内容")
+            for item in slots:
+                if not isinstance(item, dict):
+                    raise HTTPException(status_code=400,
+                                        detail="时间段修改内容格式不正确")
+                session = _clean_str(item.get("session"), "时段", 16)
+                status = item.get("status")
+                if status is not None and status not in (
+                        "NORMAL", "LATE", "ADMIN_EDIT"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="状态只能是 NORMAL / LATE / ADMIN_EDIT")
+                result = backend.checkin_admin_update(
+                    user_id=uid, group_id=group_id, period_key=period_key,
+                    session=session,
+                    checkin_time=_normalize_clock(item.get("time"), date_str),
+                    status=status)
+                if result.get("status") != "success":
+                    raise HTTPException(
+                        status_code=409,
+                        detail=result.get("message") or "该时段没有可修改的记录")
+                changed += 1
+
+        elif biz == "summary":
+            content = _clean_str(body.get("content"), "总结内容", 10000,
+                                 required=False)
+            submit_time = _normalize_clock(body.get("time"), date_str)
+            if content is None and submit_time is None:
+                raise HTTPException(status_code=400,
+                                    detail="没有需要修改的内容")
+            result = backend.summary_admin_update(
+                user_id=uid, group_id=group_id, period_key=period_key,
+                content=content, submit_time=submit_time)
+            if result.get("status") != "success":
+                raise HTTPException(
+                    status_code=409,
+                    detail=result.get("message") or "该用户本周期还没有总结记录")
+            changed = 1
+
+        else:
+            items = body.get("items")
+            submit_time = _normalize_clock(body.get("time"), date_str)
+            payload_items = []
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        raise HTTPException(status_code=400,
+                                            detail="报数字段修改内容格式不正确")
+                    try:
+                        quantity = int(item.get("quantity"))
+                        if quantity < 0:
+                            raise ValueError("negative")
+                        payload_items.append({
+                            "field_id": int(item.get("field_id")),
+                            "quantity": quantity,
+                        })
+                    except (TypeError, ValueError):
+                        raise HTTPException(
+                            status_code=400, detail="报数必须是不小于 0 的整数")
+            if not payload_items and submit_time is None:
+                raise HTTPException(status_code=400,
+                                    detail="没有需要修改的内容")
+            result = backend.report_admin_update(
+                user_id=uid, group_id=group_id, period_key=period_key,
+                items=payload_items, submit_time=submit_time)
+            if result.get("status") != "success":
+                raise HTTPException(
+                    status_code=409,
+                    detail=result.get("message") or "该用户本周期还没有报数记录")
+            changed = 1
+
+        _audit(state, request, identity, "record.edit", biz,
+               "%s/%s/%s" % (group_id, phone, period_key),
+               {"reason": reason, "remark": remark, "changed": changed,
+                "fields": body.get("slots") or body.get("items")
+                or {"content": bool(body.get("content")),
+                    "time": body.get("time")}})
+        biz_label = {"checkin": "打卡", "summary": "总结",
+                     "report": "报数"}[biz]
+        return {"ok": True, "changed": changed,
+                "message": "%s记录已更新并保存入库" % biz_label}
+
+    @router.get("/uploads/{ref}")
+    def read_upload(ref: str, request: Request):
+        """读取上传图片（后台鉴权；文件在机器人数据目录，⛔ 不走静态目录）。"""
+        identity = _identity(request, state)
+        _require_password_changed(identity)
+        from fastapi.responses import FileResponse
+        from ..web import uploads as uploads_mod
+        if not ref or len(ref) > 64:
+            raise HTTPException(status_code=404, detail="图片不存在")
+        row = state.get_upload(ref)
+        if row is None:
+            raise HTTPException(status_code=404, detail="图片不存在或已清理")
+        path = uploads_mod.upload_abs_path(config.data_dir, row["rel_path"])
+        if path is None:
+            raise HTTPException(
+                status_code=404, detail="图片已过保留期，无法查看")
+        return FileResponse(str(path), media_type=row["mime"])
 
     @router.post("/groups/{group_id}/reminders/run")
     def run_reminder(group_id: str, body: dict = Body(default={}),

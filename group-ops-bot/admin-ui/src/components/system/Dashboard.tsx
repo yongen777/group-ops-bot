@@ -8,6 +8,10 @@ import {
   FileText,
   BarChart3,
   Layers,
+  BellRing,
+  Pencil,
+  Eye,
+  UserPlus,
 } from 'lucide-react';
 import { api, gid } from '../../lib/api';
 import { useApp } from '../../lib/store';
@@ -23,6 +27,10 @@ import {
   QuickBackfillModal,
   type BackfillTarget,
 } from './QuickBackfillModal';
+import { ImagePreviewModal, type ImagePreviewData } from './ImagePreviewModal';
+import { SummaryDetailModal } from './SummaryDetailModal';
+import { AdminRecordEditModal } from './AdminRecordEditModal';
+import { AddMemberModal } from './AddMemberModal';
 
 function todayStr(): string {
   const now = new Date();
@@ -54,6 +62,15 @@ export const Dashboard: React.FC = () => {
   const [filterTab, setFilterTab] = useState<'all' | 'need_backfill' | 'completed'>('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [backfillTarget, setBackfillTarget] = useState<BackfillTarget>({});
+  // D17：凭证图片预览 / 总结全文 / 管理员修改 / 一键添加成员
+  const [imagePreview, setImagePreview] = useState<ImagePreviewData | null>(null);
+  const [summaryDetail, setSummaryDetail] = useState<BoardMember | null>(null);
+  const [editTarget, setEditTarget] = useState<{
+    member: BoardMember;
+    biz: 'checkin' | 'summary' | 'report';
+  } | null>(null);
+  const [addMemberTarget, setAddMemberTarget] = useState<BoardMember | null>(null);
+  const [reminding, setReminding] = useState(false);
 
   const date = todayStr();
 
@@ -132,8 +149,50 @@ export const Dashboard: React.FC = () => {
     setModalOpen(true);
   };
 
-  const renderStatusBadge = (
-    status: CellStatus,
+  // 提醒业务：向今日未达标成员定向催办（复用后台手动提醒链路，⛔ 不伪造结果）
+  const handleRemindPending = async () => {
+    if (!selectedGroupId) return;
+    if (pendingMembers.length === 0) {
+      showToast('当前群聊今日全员皆已达标，暂无需要提醒的成员');
+      return;
+    }
+    setReminding(true);
+    try {
+      const result = await api.post<{ ok: boolean; message: string }>(
+        `/api/admin/groups/${gid(selectedGroupId)}/reminders/run`,
+        {},
+      );
+      showToast(result.message || '已发起提醒');
+      load();
+    } catch (err: any) {
+      showToast(err?.message || '提醒未发出，请稍后重试');
+    } finally {
+      setReminding(false);
+    }
+  };
+
+  const openCheckinImage = (member: BoardMember, slotId: string, slotName: string) => {
+    const cell = member.checkin?.[slotId];
+    if (!cell?.image_ref) {
+      showToast('该时段没有上传凭证图片');
+      return;
+    }
+    const name = member.nickname || member.user_id;
+    setImagePreview({
+      url: `/api/admin/uploads/${encodeURIComponent(cell.image_ref)}`,
+      title: `${name} - ${slotName}打卡凭证`,
+      memberName: name,
+      time: cell.time,
+      type: '考勤打卡照片',
+      note: `提报人 ${name}（${member.role || '成员'}）上传的打卡现场照片`,
+    });
+  };
+
+  const statusCell = (status: CellStatus, member: BoardMember, biz: BizType) => (
+    renderStatusBadge(status, member, biz)
+  );
+
+  const renderStatusBadge = (status: CellStatus,
     member?: BoardMember,
     biz?: BizType,
     rawStatus?: string,
@@ -193,9 +252,17 @@ export const Dashboard: React.FC = () => {
             {m.role || '成员'}
           </span>
           {!m.in_roster && (
-            <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded">
-              未在名单
-            </span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setAddMemberTarget(m);
+              }}
+              className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-semibold cursor-pointer"
+              title="该成员不在名单中，点击填写姓名与岗位角色后录入"
+            >
+              <UserPlus className="w-3 h-3" />
+              <span>未在名单 · 一键添加</span>
+            </button>
           )}
         </div>
         <div className="text-[10px] text-slate-400 font-mono">{m.user_id}</div>
@@ -505,7 +572,7 @@ export const Dashboard: React.FC = () => {
                   ))}
                   <th className="py-2.5 px-3">今日总结</th>
                   <th className="py-2.5 px-3">今日报数</th>
-                  <th className="py-2.5 px-3">业务综合状态</th>
+                  <th className="py-2.5 px-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -548,22 +615,15 @@ export const Dashboard: React.FC = () => {
                             </div>
                           )}
                         </td>
-                        <td className="py-3 px-3 whitespace-nowrap">
-                          {done ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              今日达标
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => openBackfill(m)}
-                              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[11px] font-bold cursor-pointer"
-                              title="点击执行管理员补录"
-                            >
-                              <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              <span>待补录</span>
-                            </button>
-                          )}
+                        <td className="py-3 px-3 whitespace-nowrap text-right">
+                          <button
+                            onClick={() => setEditTarget({ member: m, biz: 'checkin' })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-semibold cursor-pointer transition-colors shadow-2xs"
+                            title="管理员修改并保存入库"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>编辑</span>
+                          </button>
                         </td>
                       </tr>
                     );
@@ -585,7 +645,7 @@ export const Dashboard: React.FC = () => {
                     ① 打卡业务详细完成列表 (全部用户 {checkinDone}/{total})
                   </h4>
                   <span className="text-[11px] text-slate-500">
-                    包含所有成员各时段打卡时间、打卡方式与补录来源
+                    包含全部成员各时段打卡时间与凭证图片，可查看大图并由管理员修改入库
                   </span>
                 </div>
               </div>
@@ -600,38 +660,70 @@ export const Dashboard: React.FC = () => {
                   <tr>
                     <th className="py-2.5 px-3.5">全部用户</th>
                     {slots.map((slot) => (
-                      <th key={slot.id} className="py-2.5 px-3">{slot.name}打卡时间 / 凭证</th>
+                      <th key={slot.id} className="py-2.5 px-3">{slot.name}打卡时间</th>
                     ))}
-                    <th className="py-2.5 px-3">打卡方式</th>
+                    <th className="py-2.5 px-3">打卡凭证图片</th>
                     <th className="py-2.5 px-3">完成状态</th>
+                    <th className="py-2.5 px-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {members.filter(matches).map((m) => (
-                    <tr key={m.user_id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="py-3 px-3.5 whitespace-nowrap">{memberCell(m)}</td>
-                      {slots.map((slot) => {
-                        const cell = m.checkin[slot.id];
-                        return (
-                          <td key={slot.id} className="py-3 px-3 whitespace-nowrap">
-                            <div className="font-mono font-bold text-slate-800">
-                              {cell?.time || '未打卡'}
-                            </div>
-                            <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                              <span>{cell?.method || '—'}</span>
-                              {cell?.status === 'backfilled' && <span className="text-blue-600">[补录]</span>}
-                            </div>
-                          </td>
-                        );
-                      })}
-                      <td className="py-3 px-3 whitespace-nowrap text-slate-600 text-[11px]">
-                        {m.checkin[slots[0]?.id]?.method || '—'}
-                      </td>
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        {renderStatusBadge(m.checkin_status, m, 'checkin')}
-                      </td>
-                    </tr>
-                  ))}
+                  {members.filter(matches).map((m) => {
+                    const proofSlot = slots.find((slot) => m.checkin[slot.id]?.image_ref);
+                    return (
+                      <tr key={m.user_id} className="hover:bg-slate-50/60 transition-colors">
+                        <td className="py-3 px-3.5 whitespace-nowrap">{memberCell(m)}</td>
+                        {slots.map((slot) => {
+                          const cell = m.checkin[slot.id];
+                          return (
+                            <td key={slot.id} className="py-3 px-3 whitespace-nowrap">
+                              <div className="font-mono font-bold text-slate-800">
+                                {cell?.time || <span className="text-slate-400 font-normal">未打卡</span>}
+                              </div>
+                            </td>
+                          );
+                        })}
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          {proofSlot ? (
+                            <button
+                              onClick={() => openCheckinImage(m, proofSlot.id, proofSlot.name)}
+                              className="flex items-center gap-2 group cursor-pointer"
+                              title="点击查看凭证大图"
+                            >
+                              <span className="relative w-8 h-8 rounded-lg overflow-hidden border border-slate-200 group-hover:ring-2 group-hover:ring-blue-500 transition-all shrink-0 bg-slate-100 flex items-center justify-center">
+                                <img
+                                  src={`/api/admin/uploads/${encodeURIComponent(String(m.checkin[proofSlot.id]!.image_ref))}`}
+                                  alt="打卡凭证"
+                                  className="w-full h-full object-cover"
+                                />
+                                <span className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                                  <Eye className="w-3.5 h-3.5 text-white" />
+                                </span>
+                              </span>
+                              <span className="text-[11px] text-blue-600 group-hover:text-blue-800 font-medium">
+                                查看大图
+                              </span>
+                            </button>
+                          ) : (
+                            <span className="text-slate-400 text-[11px]">暂无图片</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          {statusCell(m.checkin_status, m, 'checkin')}
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap text-right">
+                          <button
+                            onClick={() => setEditTarget({ member: m, biz: 'checkin' })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-semibold cursor-pointer transition-colors shadow-2xs"
+                            title="管理员修改并保存入库"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>编辑</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -666,8 +758,9 @@ export const Dashboard: React.FC = () => {
                     <th className="py-2.5 px-3.5">全部用户</th>
                     <th className="py-2.5 px-3">完成提交时间</th>
                     <th className="py-2.5 px-3">完成的总结内容 / 汇报信息</th>
-                    <th className="py-2.5 px-3">字数与质量</th>
+                    <th className="py-2.5 px-3">附件图片</th>
                     <th className="py-2.5 px-3">状态</th>
+                    <th className="py-2.5 px-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -678,25 +771,38 @@ export const Dashboard: React.FC = () => {
                         <div className="font-mono font-bold text-slate-800">
                           {m.summary?.at || <span className="text-amber-700 font-normal">未提交 (待补录)</span>}
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          {m.summary?.entry_source === 'admin' ? '管理员补录' : '群员提交'}
-                        </div>
                       </td>
                       <td className="py-3 px-3 max-w-sm">
-                        <div className="text-slate-700 truncate">
-                          {m.summary?.content || '—'}
-                        </div>
+                        {m.summary ? (
+                          <button
+                            onClick={() => setSummaryDetail(m)}
+                            className="w-full text-left text-slate-700 hover:text-blue-600 cursor-pointer transition-colors group flex items-center justify-between gap-2"
+                            title="点击查看工作总结全文"
+                          >
+                            <span className="truncate">{m.summary.content || '（正文为空）'}</span>
+                            <span className="shrink-0 text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity font-medium">
+                              查看全文
+                            </span>
+                          </button>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
-                        <span className="font-mono text-slate-800 font-semibold">
-                          {m.summary?.words || 0} 字
-                        </span>
-                        <div className="text-[10px] text-slate-400">
-                          {(m.summary?.words || 0) > 200 ? '详尽达标' : (m.summary?.words || 0) > 0 ? '标准' : '未上报'}
-                        </div>
+                        <span className="text-slate-400 text-[11px]">暂无图片</span>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
-                        {renderStatusBadge(m.summary_status, m, 'summary')}
+                        {statusCell(m.summary_status, m, 'summary')}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap text-right">
+                        <button
+                          onClick={() => setEditTarget({ member: m, biz: 'summary' })}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-semibold cursor-pointer transition-colors shadow-2xs"
+                          title="管理员修改并保存入库"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          <span>编辑</span>
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -735,7 +841,9 @@ export const Dashboard: React.FC = () => {
                     <th className="py-2.5 px-3">完成报数时间</th>
                     <th className="py-2.5 px-3">完成的信息 / 量化报数数据</th>
                     <th className="py-2.5 px-3">指标汇总</th>
+                    <th className="py-2.5 px-3">凭证图片</th>
                     <th className="py-2.5 px-3">状态</th>
+                    <th className="py-2.5 px-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -745,9 +853,6 @@ export const Dashboard: React.FC = () => {
                       <td className="py-3 px-3 whitespace-nowrap">
                         <div className="font-mono font-bold text-slate-800">
                           {m.report?.at || <span className="text-amber-700 font-normal">未报数 (待补录)</span>}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {m.report?.entry_source === 'admin' ? '管理员补录' : '群员提交'}
                         </div>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
@@ -772,7 +877,20 @@ export const Dashboard: React.FC = () => {
                         </span>
                       </td>
                       <td className="py-3 px-3 whitespace-nowrap">
-                        {renderStatusBadge(m.report_status, m, 'report')}
+                        <span className="text-slate-400 text-[11px]">暂无图片</span>
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        {statusCell(m.report_status, m, 'report')}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap text-right">
+                        <button
+                          onClick={() => setEditTarget({ member: m, biz: 'report' })}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-semibold cursor-pointer transition-colors shadow-2xs"
+                          title="管理员修改并保存入库"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          <span>编辑</span>
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -784,7 +902,7 @@ export const Dashboard: React.FC = () => {
 
         <div className="bg-slate-50/70 px-4 py-2.5 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between text-[11px] text-slate-500 gap-1">
           <span>
-            提示：仅「待补录」状态支持点击直接跳转并打开补录窗口；已完成与已补录状态为归档记录，不可点击。
+            提示：仅「待补录」状态支持点击直接跳转并打开补录窗口；支持点击总结文本与凭证图片查看大图全文，右侧编辑按钮支持管理员修改入库。
           </span>
           <span className="font-mono">
             打卡 {checkinDone}/{total} · 总结 {summaryDone}/{total} · 报数 {reportDone}/{total}
@@ -810,6 +928,25 @@ export const Dashboard: React.FC = () => {
               </p>
             </div>
           </div>
+
+          <button
+            onClick={handleRemindPending}
+            disabled={reminding || pendingMembers.length === 0}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer shrink-0 ${
+              pendingMembers.length > 0
+                ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+            }`}
+            title="向今日未完成业务的成员发送群内提醒与催办消息"
+          >
+            <BellRing className="w-4 h-4" />
+            <span>{reminding ? '正在提醒…' : '提醒业务'}</span>
+            {pendingMembers.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 bg-amber-600 text-white text-[10px] rounded-full">
+                {pendingMembers.length}人待催
+              </span>
+            )}
+          </button>
         </div>
 
         {pendingMembers.length === 0 ? (
@@ -884,6 +1021,51 @@ export const Dashboard: React.FC = () => {
           slots={slots}
           target={backfillTarget}
           onDone={(message) => {
+            showToast(message);
+            load();
+          }}
+        />
+      )}
+
+      <ImagePreviewModal
+        data={imagePreview}
+        onClose={() => setImagePreview(null)}
+      />
+
+      <SummaryDetailModal
+        member={summaryDetail}
+        onClose={() => setSummaryDetail(null)}
+        onOpenEdit={(member) => {
+          setSummaryDetail(null);
+          setEditTarget({ member, biz: 'summary' });
+        }}
+      />
+
+      {editTarget && selectedGroupId && (
+        <AdminRecordEditModal
+          isOpen
+          onClose={() => setEditTarget(null)}
+          groupId={selectedGroupId}
+          date={date}
+          member={editTarget.member}
+          slots={slots}
+          initialBiz={editTarget.biz}
+          onSaved={(message) => {
+            showToast(message);
+            load();
+          }}
+        />
+      )}
+
+      {addMemberTarget && selectedGroupId && (
+        <AddMemberModal
+          isOpen
+          groupId={selectedGroupId}
+          userId={addMemberTarget.user_id}
+          defaultName={addMemberTarget.nickname || ''}
+          defaultRole={addMemberTarget.role || ''}
+          onClose={() => setAddMemberTarget(null)}
+          onAdded={(message) => {
             showToast(message);
             load();
           }}

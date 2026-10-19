@@ -35,12 +35,31 @@
   .ok { color: #137333; }
   .warn { color: #b06000; }
   .err { color: #c5221f; }
+  .verify-row { display: flex; gap: 8px; margin-top: 10px; }
+  .verify-row input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px;
+                      font-size: 15px; letter-spacing: 2px; }
+  .verify-row button { width: auto; margin: 0; padding: 10px 16px; }
+  .holder-name { color: #1a73e8; font-weight: 600; }
+  #verifyMsg { font-size: 13px; margin-top: 8px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>今日报数</h1>
   <div class="sub">按需添加本次要报的字段并填写数量（可添加多行）</div>
+
+  <div class="card" id="verifyCard">
+    <div class="sub" style="margin:0">
+      此链接为「<span class="holder-name" id="holderName">该成员</span>」的专属链接，
+      仅本人可提交报数。其他人请勿使用，请返回群聊告知本人操作。
+    </div>
+    <div class="verify-row">
+      <input id="verifyInput" type="text" inputmode="numeric" maxlength="4"
+             placeholder="本人手机号后 4 位" autocomplete="off">
+      <button id="verifyBtn" type="button">验证身份</button>
+    </div>
+    <div id="verifyMsg" class="sub"></div>
+  </div>
 
   <div class="card">
     <div id="fields"><div class="empty">字段加载中…</div></div>
@@ -78,6 +97,8 @@
 
   var fields = [];        // 字段池（info 返回，全局共享）
   var rows = [];          // 已添加的行 { select, qty }
+  var verifyTail = "";    // 本人手机号后 4 位（身份绑定，服务端强制校验）
+  var verified = false;
 
   function fieldLabel(f) {
     return f.unit ? (f.field_name + "（" + f.unit + "）") : f.field_name;
@@ -104,7 +125,7 @@
     var valid = rows.length > 0 && rows.every(function (row) {
       return row.select.value !== "" && /^\d+$/.test(row.qty.value.trim());
     });
-    $("submitBtn").disabled = !valid;
+    $("submitBtn").disabled = !valid || !verified;
   }
 
   function removeRow(row) {
@@ -187,10 +208,28 @@
       return;
     }
     showEmptyHint();
-    $("addBtn").disabled = false;
+    $("addBtn").disabled = true;   // 身份未确认前不许开始填写
+    $("verifyMsg").textContent = "请先填写本人手机号后 4 位完成身份验证。";
+    $("verifyMsg").className = "sub warn";
+    if (data.holder_name) { $("holderName").textContent = data.holder_name; }
   }).catch(function () {
     $("fields").innerHTML = "";
     say("网络异常，请稍后重试。", "err");
+  });
+
+  $("verifyBtn").addEventListener("click", function () {
+    var tail = ($("verifyInput").value || "").trim();
+    if (!/^[0-9]{4}$/.test(tail)) {
+      $("verifyMsg").textContent = "请填写 4 位数字（本人手机号后 4 位）。";
+      $("verifyMsg").className = "sub warn";
+      return;
+    }
+    verifyTail = tail;
+    verified = true;
+    $("addBtn").disabled = !fields.length;
+    $("verifyMsg").textContent = "身份信息已填写，提交时由服务器核验（不匹配会被拒绝）。";
+    $("verifyMsg").className = "sub ok";
+    refreshSubmitState();
   });
 
   $("addBtn").addEventListener("click", addRow);
@@ -213,14 +252,23 @@
                    quantity: parseInt(raw, 10) });
     }
     if (!items.length) { say("请至少添加一个要报的字段。", "warn"); return; }
+    if (!verified) { say("请先填写本人手机号后 4 位完成身份核验。", "warn"); return; }
     say("正在提交…", "");
     // ⛔ 不再发送 role（2026-10-16 去角色化：角色由服务端派生）
-    post("/api/h5/report/submit", { token: token, items: items })
+    post("/api/h5/report/submit",
+         { token: token, items: items, verify: verifyTail })
       .then(function (data) {
         say(data.message || "", data.ok ? "ok" : (data.kind === "C" ? "warn" : "err"));
         if (data.ok) {
           $("submitBtn").disabled = true;
           $("addBtn").disabled = true;
+        }
+        if (data && data.reason === "holder_mismatch") {
+          verified = false;
+          verifyTail = "";
+          $("addBtn").disabled = true;
+          $("verifyMsg").textContent = data.message || "身份不匹配，仅链接本人可提交。";
+          $("verifyMsg").className = "sub err";
         }
       })
       .catch(function () { say("提交失败，请稍后重试。", "err"); });

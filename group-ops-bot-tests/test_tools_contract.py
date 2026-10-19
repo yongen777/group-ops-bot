@@ -19,8 +19,11 @@ from mcp_server.server import build_server
 
 EXPECTED_TOOLS = {
     "checkin.submit", "checkin.query_status", "checkin.query_records",
+    "checkin.admin_update",
     "summary.save", "summary.query_status", "summary.query_records",
+    "summary.admin_update",
     "report.submit", "report.query_status", "report.query_records",
+    "report.admin_update",
     "user.upsert", "user.get", "user.list",
     "op.query_by_request", "op.query_log",
 }

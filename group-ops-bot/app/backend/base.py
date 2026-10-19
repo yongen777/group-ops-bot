@@ -110,5 +110,26 @@ class Backend(ABC):
     def op_query_by_request(self, *, request_id: str) -> dict:
         """op.query_by_request —— C 类恢复查证的唯一入口（§4.11.3 第 6 条）。"""
 
+    # ---------- 管理员修改既有记录（D17，2026-10-19） ----------
+
+    @abstractmethod
+    def checkin_admin_update(self, *, user_id: int, group_id: str,
+                             period_key: str, session: str,
+                             checkin_time: Optional[str] = None,
+                             status: Optional[str] = None) -> dict:
+        """checkin.admin_update：改时间/状态。⛔ 不插入（补录另有入口）。"""
+
+    @abstractmethod
+    def summary_admin_update(self, *, user_id: int, group_id: str,
+                             period_key: str, content: Optional[str] = None,
+                             submit_time: Optional[str] = None) -> dict:
+        """summary.admin_update：改正文/提交时间。⛔ 不插入。"""
+
+    @abstractmethod
+    def report_admin_update(self, *, user_id: int, group_id: str,
+                            period_key: str, items: Optional[list] = None,
+                            submit_time: Optional[str] = None) -> dict:
+        """report.admin_update：改字段数值/提交时间。⛔ 不插入。"""
+
     def close(self) -> None:  # pragma: no cover - 默认无需清理
         """释放资源（默认无操作）。"""

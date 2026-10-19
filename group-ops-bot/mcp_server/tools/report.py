@@ -54,6 +54,41 @@ def handle_query_records(writer, *, group_id: str, period_key: str) -> dict:
     return {"records": records}
 
 
+def handle_admin_update(writer, *, user_id: int, group_id: str,
+                        period_key: str, items=None,
+                        submit_time=None) -> dict:
+    """report.admin_update（2026-10-19 D17）：管理员修改既有报数。
+
+    items: [{"field_id": int, "quantity": int}]，只改传入的字段；
+    ⛔ 无记录 -> rejected（补录走 report.submit）。
+    """
+    normalized = []
+    for item in items or []:
+        try:
+            field_id = int(item.get("field_id"))
+            quantity = int(item.get("quantity"))
+        except (TypeError, ValueError, AttributeError):
+            return {"status": "rejected", "record_id": None,
+                    "message": "报数字段必须是整数"}
+        if quantity < 0:
+            return {"status": "rejected", "record_id": None,
+                    "message": "报数必须是非负整数"}
+        normalized.append({"field_id": field_id, "quantity": quantity})
+    if not normalized and not submit_time:
+        return {"status": "rejected", "record_id": None,
+                "message": "没有需要修改的内容"}
+    with writer.pool.connection() as conn:
+        with conn.cursor() as cur:
+            changed = writer.dao.update_report_admin(
+                cur, group_id, user_id, period_key,
+                items=normalized, submit_time=submit_time)
+        conn.commit()
+    if not changed:
+        return {"status": "rejected", "record_id": None,
+                "message": "该用户本周期还没有报数记录"}
+    return {"status": "success", "record_id": None, "message": "ok"}
+
+
 def register(mcp, writer) -> None:
     @mcp.tool(name=TOOL_SUBMIT)
     def report_submit(user_id: int, group_id: str, period_key: str,
@@ -77,3 +112,12 @@ def register(mcp, writer) -> None:
         """查询某群某周期的报数记录（含明细项，只读，导出用）。"""
         return handle_query_records(writer, group_id=group_id,
                                     period_key=period_key)
+
+    @mcp.tool(name="report.admin_update")
+    def report_admin_update(user_id: int, group_id: str, period_key: str,
+                            items: list | None = None,
+                            submit_time: str | None = None) -> dict:
+        """管理员修改既有报数（各字段数值 / 提交时间）。无记录返回 rejected。"""
+        return handle_admin_update(writer, user_id=user_id,
+                                   group_id=group_id, period_key=period_key,
+                                   items=items, submit_time=submit_time)

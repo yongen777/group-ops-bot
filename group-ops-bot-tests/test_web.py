@@ -21,6 +21,8 @@ from helpers import (GROUP, PHONE, TZ, enable_all, extract_token, make_config,
                      make_upload, setup_fields)
 
 NOW = datetime(2026, 10, 13, 10, 0, tzinfo=TZ)
+# 2026-10-19 D17：H5 链接身份绑定 —— 上传/提交要带本人手机号后 4 位
+HOLDER_TAIL = PHONE[-4:]
 
 
 def make_app(tmp_db, backend=None, sender=None, now=None):
@@ -141,6 +143,7 @@ class TestH5Report:
         sender.push_ok = True
         submit = client.post("/api/h5/report/submit", json={
             "token": token,
+            "verify": HOLDER_TAIL,
             "items": [{"field_id": 1, "quantity": 3},
                       {"field_id": 2, "quantity": 500}]})
         assert submit.status_code == 200
@@ -185,10 +188,10 @@ class TestH5Report:
         # 再让后端不可达 -> C 类（⛔ 不是「缺图」的 B）
         up = client.post("/api/h5/checkin/upload",
                          files={"file": ("a.jpg", JPEG_BYTES, "image/jpeg")},
-                         data={"token": token})
+                         data={"token": token, "verify": HOLDER_TAIL})
         assert up.status_code == 200
         resp = client.post("/api/h5/checkin/submit",
-                           json={"token": token,
+                           json={"token": token, "verify": HOLDER_TAIL,
                                  "image_ref": up.json()["image_ref"]})
         assert resp.json()["kind"] == "C"
         tasks = tmp_db.pending_recovery_tasks()
@@ -225,7 +228,7 @@ class TestH5CheckinUpload:
         up = client.post("/api/h5/checkin/upload",
                          files={"file": ("shot.jpg", JPEG_BYTES,
                                          "image/jpeg")},
-                         data={"token": token})
+                         data={"token": token, "verify": HOLDER_TAIL})
         assert up.status_code == 200
         ref = up.json()["image_ref"]
 
@@ -239,7 +242,8 @@ class TestH5CheckinUpload:
 
         sender.push_ok = True
         submit = client.post("/api/h5/checkin/submit",
-                             json={"token": token, "image_ref": ref})
+                             json={"token": token, "image_ref": ref,
+                                 "verify": HOLDER_TAIL})
         assert submit.json()["kind"] == "A"
         # 用户指令二：成功后群内 @ 通知（真实手机号，⛔ 不靠文本假装 @）
         assert len(sender.pushed) == 1
@@ -255,7 +259,7 @@ class TestH5CheckinUpload:
         token = self._issue(tmp_db, client, sender)
         resp = client.post("/api/h5/checkin/upload",
                            files={"file": ("a.gif", GIF_BYTES, "image/gif")},
-                           data={"token": token})
+                           data={"token": token, "verify": HOLDER_TAIL})
         assert resp.status_code == 400
         assert "JPG" in resp.json()["message"]
 
@@ -267,7 +271,7 @@ class TestH5CheckinUpload:
         big = b"\xff\xd8\xff" + b"\x00" * (uploads_mod.MAX_UPLOAD_BYTES + 16)
         resp = client.post("/api/h5/checkin/upload",
                            files={"file": ("big.jpg", big, "image/jpeg")},
-                           data={"token": token})
+                           data={"token": token, "verify": HOLDER_TAIL})
         assert resp.status_code == 400
         assert "上限" in resp.json()["message"]
 
@@ -294,7 +298,7 @@ class TestH5CheckinUpload:
         resp = client2.post("/api/h5/checkin/upload",
                             files={"file": ("a.jpg", JPEG_BYTES,
                                             "image/jpeg")},
-                            data={"token": token})
+                            data={"token": token, "verify": HOLDER_TAIL})
         assert resp.status_code == 400
         assert resp.json()["reason"] == "expired"
 
@@ -304,7 +308,8 @@ class TestH5CheckinUpload:
         token = self._issue(tmp_db, client, sender)
         foreign = make_upload(tmp_db, "not-the-token")
         resp = client.post("/api/h5/checkin/submit",
-                           json={"token": token, "image_ref": foreign})
+                           json={"token": token, "image_ref": foreign,
+                                 "verify": HOLDER_TAIL})
         assert resp.json()["kind"] == "B"
         assert "图片凭证" in resp.json()["message"]
 
@@ -313,7 +318,8 @@ class TestH5CheckinUpload:
         client = TestClient(app)
         token = self._issue(tmp_db, client, sender)
         resp = client.post("/api/h5/checkin/submit",
-                           json={"token": token, "image_ref": ""})
+                           json={"token": token, "image_ref": "",
+                                 "verify": HOLDER_TAIL})
         assert resp.json()["kind"] == "B"
         assert "上传" in resp.json()["message"]
 
@@ -389,3 +395,80 @@ class TestStatsCommand:
         import os
         match = re.search(r"本地路径 (\S+?)(?:，|$)", text)
         assert match and os.path.exists(match.group(1))
+
+
+class TestH5HolderBinding:
+    """D17（2026-10-19）：H5 链接与用户身份绑定。
+
+    口径：链接在群里发，谁都能点开 —— 必须填「本人手机号后 4 位」才能
+    上传/提交；不匹配一律 403 + 明确话术 + 安全留痕，⛔ 不做「只提示不拦」。
+    """
+
+    def _issue(self, tmp_db, client, sender):
+        enable_all(tmp_db)
+        client.post("/api/callback", json=callback_payload("打卡"))
+        return extract_token(sender.sent[-1]["text"])
+
+    def test_info_exposes_holder_name(self, tmp_db):
+        app, _b, sender = make_app(tmp_db)
+        client = TestClient(app)
+        token = self._issue(tmp_db, client, sender)
+        body = client.post("/api/h5/checkin/info", json={"token": token}).json()
+        assert body["ok"] is True
+        assert body["require_verify"] is True
+        # 名单里没有该成员时后端回空串（页面回落到「该成员」占位）
+        assert "holder_name" in body
+
+    def test_upload_rejects_other_holder(self, tmp_db):
+        app, _b, sender = make_app(tmp_db)
+        client = TestClient(app)
+        token = self._issue(tmp_db, client, sender)
+        resp = client.post("/api/h5/checkin/upload",
+                           files={"file": ("a.jpg", JPEG_BYTES,
+                                           "image/jpeg")},
+                           data={"token": token, "verify": "0000"
+                                 if HOLDER_TAIL != "0000" else "1111"})
+        assert resp.status_code == 403
+        assert resp.json()["reason"] == "holder_mismatch"
+        assert "专属链接" in resp.json()["message"]
+        events = tmp_db._conn.execute(
+            "SELECT * FROM security_event WHERE event_type='holder_mismatch'"
+        ).fetchall()
+        assert len(events) == 1
+
+    def test_upload_rejects_missing_verify(self, tmp_db):
+        app, _b, sender = make_app(tmp_db)
+        client = TestClient(app)
+        token = self._issue(tmp_db, client, sender)
+        resp = client.post("/api/h5/checkin/upload",
+                           files={"file": ("a.jpg", JPEG_BYTES,
+                                           "image/jpeg")},
+                           data={"token": token})
+        assert resp.status_code == 403
+        assert resp.json()["reason"] == "holder_mismatch"
+
+    def test_submit_rejects_other_holder(self, tmp_db):
+        app, _b, sender = make_app(tmp_db)
+        client = TestClient(app)
+        token = self._issue(tmp_db, client, sender)
+        up = client.post("/api/h5/checkin/upload",
+                         files={"file": ("a.jpg", JPEG_BYTES, "image/jpeg")},
+                         data={"token": token, "verify": HOLDER_TAIL})
+        ref = up.json()["image_ref"]
+        wrong = "0000" if HOLDER_TAIL != "0000" else "1111"
+        resp = client.post("/api/h5/checkin/submit",
+                           json={"token": token, "image_ref": ref,
+                                 "verify": wrong})
+        assert resp.status_code == 403
+        assert resp.json()["reason"] == "holder_mismatch"
+
+    def test_submit_rejects_other_holder_without_image(self, tmp_db):
+        """即使没图，别人也不能借这个链接提交（先拦住身份，再谈业务）。"""
+        app, _b, sender = make_app(tmp_db)
+        client = TestClient(app)
+        token = self._issue(tmp_db, client, sender)
+        wrong = "0000" if HOLDER_TAIL != "0000" else "1111"
+        resp = client.post("/api/h5/checkin/submit",
+                           json={"token": token, "image_ref": "",
+                                 "verify": wrong})
+        assert resp.status_code == 403

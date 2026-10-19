@@ -193,6 +193,38 @@ class FakeBackend:
             "status": "success", "record_id": 9,
             "duplicate": False, "message": "保存成功"})
 
+    # ---------- 管理员修改既有记录（D17） ----------
+
+    def checkin_admin_update(self, *, user_id, group_id, period_key, session,
+                             checkin_time=None, status=None):
+        self._record("checkin_admin_update", {
+            "user_id": user_id, "group_id": group_id,
+            "period_key": period_key, "session": session,
+            "checkin_time": checkin_time, "status": status})
+        self._maybe_raise("checkin_admin_update")
+        return self.results.get("checkin_admin_update", {
+            "status": "success", "record_id": None, "message": "ok"})
+
+    def summary_admin_update(self, *, user_id, group_id, period_key,
+                             content=None, submit_time=None):
+        self._record("summary_admin_update", {
+            "user_id": user_id, "group_id": group_id,
+            "period_key": period_key, "content": content,
+            "submit_time": submit_time})
+        self._maybe_raise("summary_admin_update")
+        return self.results.get("summary_admin_update", {
+            "status": "success", "record_id": None, "message": "ok"})
+
+    def report_admin_update(self, *, user_id, group_id, period_key,
+                            items=None, submit_time=None):
+        self._record("report_admin_update", {
+            "user_id": user_id, "group_id": group_id,
+            "period_key": period_key, "items": items,
+            "submit_time": submit_time})
+        self._maybe_raise("report_admin_update")
+        return self.results.get("report_admin_update", {
+            "status": "success", "record_id": None, "message": "ok"})
+
     def summary_query_status(self, *, user_id, group_id, period_key):
         self._record("summary_query_status", {
             "user_id": user_id, "group_id": group_id, "period_key": period_key})

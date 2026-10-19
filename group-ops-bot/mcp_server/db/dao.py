@@ -121,7 +121,82 @@ class Dao:
                 "status", "entry_source")
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
+    def update_checkin_admin(self, cur, group_id: str, user_id: int,
+                             period_key: str, session: str,
+                             checkin_time: Optional[str] = None,
+                             status: Optional[str] = None) -> int:
+        """管理员修改既有打卡记录（2026-10-19 D17 编辑链路）。
+
+        - ⛔ 不做插入：没有记录就是 0（补录走 checkin.submit/ADMIN_EDIT）
+        - 只改 checkin_time / status，并把 entry_source 标回 admin（留痕）
+        - 先查后改：MySQL 的 rowcount 在「值未变」时也是 0，⛔ 不能拿它判存在
+        """
+        cur.execute(
+            "SELECT id FROM %s WHERE group_id=%%s AND user_id=%%s"
+            " AND period_key=%%s AND session=%%s" % T_CHECKIN,
+            (group_id, user_id, period_key, session))
+        row = cur.fetchone()
+        if not row:
+            return 0
+        sets = ["entry_source='admin'"]
+        params = []
+        if checkin_time:
+            sets.append("checkin_time=%s")
+            params.append(checkin_time)
+        if status:
+            sets.append("status=%s")
+            params.append(status)
+        params.append(int(row[0]))
+        cur.execute("UPDATE %s SET %s WHERE id=%%s" % (T_CHECKIN, ", ".join(sets)),
+                    params)
+        return 1
+
     # ---------- summary_record ----------
+
+    def update_summary_admin(self, cur, group_id: str, user_id: int,
+                             period_key: str, content: Optional[str] = None,
+                             submit_time: Optional[str] = None) -> int:
+        """管理员修改既有总结（内容 / 提交时间）；无记录返回 0。"""
+        cur.execute(
+            "SELECT id FROM %s WHERE group_id=%%s AND user_id=%%s"
+            " AND period_key=%%s" % T_SUMMARY,
+            (group_id, user_id, period_key))
+        row = cur.fetchone()
+        if not row:
+            return 0
+        cur.execute(
+            "UPDATE %s SET content=COALESCE(%%s, content),"
+            " updated_time=COALESCE(%%s, updated_time),"
+            " entry_source='admin' WHERE id=%%s" % T_SUMMARY,
+            (content, submit_time, int(row[0])))
+        return 1
+
+    def update_report_admin(self, cur, group_id: str, user_id: int,
+                            period_key: str, items: Optional[list] = None,
+                            submit_time: Optional[str] = None) -> int:
+        """管理员修改既有报数（各字段数值 / 提交时间）；无记录返回 0。
+
+        - 明细按 field_id 逐条 UPDATE，⛔ 不整批删了重建（保留 created_time 审计线）
+        - 只改本次传入的 field_id，未知字段忽略（校验在工具层）
+        """
+        cur.execute(
+            "SELECT id FROM %s WHERE group_id=%%s AND user_id=%%s"
+            " AND period_key=%%s" % T_REPORT,
+            (group_id, user_id, period_key))
+        row = cur.fetchone()
+        if not row:
+            return 0
+        record_id = int(row[0])
+        if submit_time:
+            cur.execute(
+                "UPDATE %s SET created_time=%%s, entry_source='admin'"
+                " WHERE id=%%s" % T_REPORT, (submit_time, record_id))
+        for item in items or []:
+            cur.execute(
+                "UPDATE %s SET quantity=%%s WHERE record_id=%%s"
+                " AND field_id=%%s" % T_REPORT_ITEM,
+                (item["quantity"], record_id, item["field_id"]))
+        return 1
 
     def upsert_summary(self, cur, user_id: int, group_id: str, period_key: str,
                        period_type: str, content: str, request_id: str,

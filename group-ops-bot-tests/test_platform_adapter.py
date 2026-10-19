@@ -28,7 +28,7 @@ def _real_payload() -> dict:
         "callBackUrl": "http://219.151.177.33:12334/api/reply/abcdef0123456789",
         "groupId": "gid_1737999999999",
         "groupName": "量子密信群机器人开发沟通群",
-        "phone": "17313771297",
+        "phone": "13800000000",
         "robotId": "robot_8888888888888",
         "tenantId": 10001,
         "textMsg": {"content": "绑定", "tenantId": 10001},
@@ -41,7 +41,7 @@ class TestRealPayloadAdaptation:
     def test_real_shape_normalizes_end_to_end(self):
         inbound = nm.normalize_payload(adapt(_real_payload()))
         assert inbound.group_id == "gid_1737999999999"
-        assert inbound.phone == "17313771297"
+        assert inbound.phone == "13800000000"
         assert inbound.text == "绑定"
         assert inbound.reply_url.startswith("http://219.151.177.33:12334/")
         assert inbound.name == "郑佳"
@@ -124,7 +124,7 @@ class TestProbeLeaksNoValue:
     def test_shape_contains_names_not_values(self):
         raw = _real_payload()
         line = shape_line(raw)
-        for secret in ("17313771297", "郑佳", "绑定",
+        for secret in ("13800000000", "郑佳", "绑定",
                        "gid_1737999999999", "abcdef0123456789"):
             assert secret not in line, "探针⛔ 不得记录任何值"
         for field in ("callBackUrl", "groupId", "textMsg", "userName"):

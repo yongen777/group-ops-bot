@@ -52,6 +52,25 @@ def handle_query_records(writer, *, group_id: str, period_key: str) -> dict:
     return {"records": records}
 
 
+def handle_admin_update(writer, *, user_id: int, group_id: str,
+                        period_key: str, content=None,
+                        submit_time=None) -> dict:
+    """summary.admin_update（2026-10-19 D17）：管理员修改既有总结。
+
+    ⛔ 无记录 -> rejected（补录走 summary.save，本工具只改已有行）。
+    """
+    with writer.pool.connection() as conn:
+        with conn.cursor() as cur:
+            changed = writer.dao.update_summary_admin(
+                cur, group_id, user_id, period_key,
+                content=content, submit_time=submit_time)
+        conn.commit()
+    if not changed:
+        return {"status": "rejected", "record_id": None,
+                "message": "该用户本周期还没有总结记录"}
+    return {"status": "success", "record_id": None, "message": "ok"}
+
+
 def register(mcp, writer) -> None:
     @mcp.tool(name=TOOL_SAVE)
     def summary_save(user_id: int, group_id: str, period_key: str,
@@ -75,3 +94,12 @@ def register(mcp, writer) -> None:
         """查询某群某周期的总结记录（只读）。"""
         return handle_query_records(writer, group_id=group_id,
                                     period_key=period_key)
+
+    @mcp.tool(name="summary.admin_update")
+    def summary_admin_update(user_id: int, group_id: str, period_key: str,
+                             content: str | None = None,
+                             submit_time: str | None = None) -> dict:
+        """管理员修改既有总结（正文 / 提交时间）。无记录返回 rejected。"""
+        return handle_admin_update(writer, user_id=user_id, group_id=group_id,
+                                   period_key=period_key, content=content,
+                                   submit_time=submit_time)

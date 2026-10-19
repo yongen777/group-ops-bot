@@ -69,6 +69,25 @@ def handle_query_records(writer, *, group_id: str, period_key: str) -> dict:
     return {"records": records}
 
 
+def handle_admin_update(writer, *, user_id: int, group_id: str, period_key: str,
+                        session: str, checkin_time: Optional[str] = None,
+                        status: Optional[str] = None) -> dict:
+    """checkin.admin_update（2026-10-19 D17）：管理员修改既有打卡记录。
+
+    ⛔ 无记录 -> rejected（补录不是本工具的职责，走 checkin.submit）。
+    """
+    with writer.pool.connection() as conn:
+        with conn.cursor() as cur:
+            changed = writer.dao.update_checkin_admin(
+                cur, group_id, user_id, period_key, session,
+                checkin_time=checkin_time, status=status)
+        conn.commit()
+    if not changed:
+        return {"status": "rejected", "record_id": None,
+                "message": "该时段没有可修改的打卡记录"}
+    return {"status": "success", "record_id": None, "message": "ok"}
+
+
 def register(mcp, writer) -> None:
     @mcp.tool(name=TOOL_SUBMIT)
     def checkin_submit(user_id: int, group_id: str, period_key: str, session: str,
@@ -99,3 +118,12 @@ def register(mcp, writer) -> None:
         """查询某群某周期的全部打卡记录（含各时段，只读，统计导出用）。"""
         return handle_query_records(writer, group_id=group_id,
                                     period_key=period_key)
+
+    @mcp.tool(name="checkin.admin_update")
+    def checkin_admin_update(user_id: int, group_id: str, period_key: str,
+                             session: str, checkin_time: str | None = None,
+                             status: str | None = None) -> dict:
+        """管理员修改既有打卡记录（时间 / 状态）。无记录返回 rejected。"""
+        return handle_admin_update(writer, user_id=user_id, group_id=group_id,
+                                   period_key=period_key, session=session,
+                                   checkin_time=checkin_time, status=status)

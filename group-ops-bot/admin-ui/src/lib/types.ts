@@ -84,6 +84,9 @@ export interface CheckinCell {
   status: CellStatus;
   method: string;
   raw_status: string;
+  /** 凭证图片引用（后台鉴权接口 /api/admin/uploads/<ref>；空 = 无图） */
+  image_ref?: string;
+  image_name?: string;
 }
 
 export interface SummaryCell {

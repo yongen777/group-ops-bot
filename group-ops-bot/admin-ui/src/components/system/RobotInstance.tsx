@@ -267,9 +267,9 @@ export const RobotInstance: React.FC = () => {
             <span className="w-5 h-5 rounded-full bg-blue-600 text-white font-bold text-[10px] flex items-center justify-center">
               4
             </span>
-            <div className="font-bold text-blue-900 text-[11px]">群内首次@触发</div>
+            <div className="font-bold text-blue-900 text-[11px]">群内发送绑定口令</div>
             <p className="text-[10px] text-blue-700">
-              在群里@机器人发送「绑定」或任意内容，后台自动生成待绑定记录。
+              在群里@机器人只能发送【绑定】指令方可激活并实现该功能（发送其他内容无法触发绑定）。
             </p>
           </div>
 

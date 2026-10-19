@@ -179,6 +179,36 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
         """表单字段版令牌提取（multipart 上传用；同 _token_of 口径）。"""
         return value.strip() if isinstance(value, str) else ""
 
+    # ---------- H5 链接身份绑定（2026-10-19 D17 用户指令） ----------
+    # 令牌本身绑定手机号，但链接是在群里发的 —— 谁都能点开。要求输入
+    # 「本人手机号后 4 位」才放行上传/提交：其他人打开看到明确提醒且被拒。
+    # ⛔ 后端强制（不是只做前端提示），不匹配一律 403 + 安全留痕。
+
+    def _holder_name(group_id: str, phone: str) -> str:
+        try:
+            for item in state.list_member_tasks(group_id):
+                if str(item["user_id"]) == str(phone):
+                    return str(item["nickname"] or "")
+        except Exception:  # pragma: no cover - 只影响展示
+            return ""
+        return ""
+
+    def _holder_ok(record, provided) -> bool:
+        tail = str(getattr(record, "phone", "") or "")[-4:]
+        text = provided.strip() if isinstance(provided, str) else ""
+        return bool(tail) and text == tail
+
+    def _holder_reject(record, action: str):
+        name = _holder_name(record.group_id, record.phone) or "该成员"
+        state.record_security_event(
+            "holder_mismatch", record.group_id, record.phone,
+            "h5 %s identity mismatch" % action)
+        return JSONResponse(status_code=403, content={
+            "ok": False, "reason": "holder_mismatch",
+            "message": "此链接为「%s」的专属链接，仅本人可%s。"
+                       "请填写本人手机号后 4 位验证身份。" % (name, action),
+            "holder_name": name})
+
     # 注：令牌拒绝的安全留痕在处理器内统一落（覆盖 info + submit 两条路径），
     #     ⛔ 这里不再记一份，否则同一拒绝会重复两条 security_event。
     # ---------- 探针 ----------
@@ -331,7 +361,11 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
         if record is None:
             return {"ok": False, "reason": "not_found",
                     "message": TOKEN_NOT_FOUND_MESSAGE}
-        return checkin_handler.token_info(ctx, token)
+        data = checkin_handler.token_info(ctx, token)
+        if isinstance(data, dict) and data.get("ok"):
+            data["holder_name"] = _holder_name(ctx.group_id, ctx.phone)
+            data["require_verify"] = True
+        return data
 
     @app.post("/api/h5/checkin/upload")
     async def checkin_upload(request: Request):
@@ -370,6 +404,9 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
             return JSONResponse(status_code=400, content={
                 "ok": False, "reason": "not_found",
                 "message": TOKEN_NOT_FOUND_MESSAGE})
+        # 身份核对先于一切业务校验：非本人连上传通道都不进（fail-closed）
+        if not _holder_ok(record, form.get("verify")):
+            return _holder_reject(record, "上传打卡图片")
         _record, reason = checkin_handler.validate_token(
             ctx, _token_str(token_value), with_session=False)
         if reason is not None:
@@ -414,6 +451,8 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
         image_meta = body.get("image_meta")
         if image_meta is not None and not isinstance(image_meta, dict):
             image_meta = None
+        if not _holder_ok(record, body.get("verify")):
+            return _holder_reject(record, "提交打卡")
         result = checkin_handler.submit_from_h5(
             ctx, token, image_ref if isinstance(image_ref, str) else "",
             image_meta)
@@ -427,7 +466,11 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
         if record is None:
             return {"ok": False, "reason": "not_found",
                     "message": TOKEN_NOT_FOUND_MESSAGE}
-        return report_handler.token_info(ctx, token)
+        data = report_handler.token_info(ctx, token)
+        if isinstance(data, dict) and data.get("ok"):
+            data["holder_name"] = _holder_name(ctx.group_id, ctx.phone)
+            data["require_verify"] = True
+        return data
 
     @app.post("/api/h5/report/submit")
     def report_submit(body: dict = Body(...)):
@@ -437,6 +480,8 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
             return {"ok": False, "kind": "B", "reason": "not_found",
                     "message": TOKEN_NOT_FOUND_MESSAGE}
         # 2026-10-16 去角色化：⛔ 不再收客户端 role（服务端派生）
+        if not _holder_ok(record, body.get("verify")):
+            return _holder_reject(record, "提交报数")
         result = report_handler.submit_from_h5(ctx, token, body.get("items"))
         return {"ok": result.kind == KIND_A, "kind": result.kind,
                 "message": result.message}

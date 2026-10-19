@@ -32,6 +32,12 @@
   #expireHint { font-size: 13px; color: #b06000; margin-top: 10px; }
   #expireHint.expired { color: #c5221f; font-weight: 600; }
   .file-name { font-size: 13px; color: #555; margin-top: 8px; word-break: break-all; }
+  .verify-row { display: flex; gap: 8px; margin-top: 10px; }
+  .verify-row input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px;
+                      font-size: 15px; letter-spacing: 2px; }
+  .verify-row .primary { width: auto; margin: 0; padding: 10px 16px; }
+  .holder-name { color: #1a73e8; font-weight: 600; }
+  #verifyMsg { font-size: 13px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -43,6 +49,19 @@
     <div class="row"><span class="k">时段</span><span id="session">—</span></div>
     <div class="row"><span class="k">日期</span><span id="period">—</span></div>
     <div class="row"><span class="k">状态</span><span id="state">加载中…</span></div>
+  </div>
+
+  <div class="card" id="verifyCard">
+    <div class="sub" style="margin:0">
+      此链接为「<span class="holder-name" id="holderName">该成员</span>」的专属链接，
+      仅本人可上传与提交打卡。其他人请勿使用，请返回群聊告知本人操作。
+    </div>
+    <div class="verify-row">
+      <input id="verifyInput" type="text" inputmode="numeric" maxlength="4"
+             placeholder="本人手机号后 4 位" autocomplete="off">
+      <button class="primary" id="verifyBtn" type="button">验证身份</button>
+    </div>
+    <div id="verifyMsg" class="sub"></div>
   </div>
 
   <div class="card" id="uploadCard">
@@ -77,6 +96,8 @@
   });
   var token = params.t || "";
   var imageRef = "";
+  var verifyTail = "";    // 本人手机号后 4 位（身份绑定，服务端强制校验）
+  var verified = false;
   var expiresAt = null;   // Date 对象；链接过期时刻（服务端口径）
   var expired = false;
   var countdownTimer = null;
@@ -107,7 +128,22 @@
     $("cameraBtn").disabled = true;
     $("galleryBtn").disabled = true;
     $("submitBtn").disabled = true;
+    $("verifyBtn").disabled = true;
     if (countdownTimer) { clearInterval(countdownTimer); }
+  }
+  function lockActions(hint) {
+    $("cameraBtn").disabled = true;
+    $("galleryBtn").disabled = true;
+    $("submitBtn").disabled = true;
+    $("verifyMsg").textContent = hint;
+    $("verifyMsg").className = "sub warn";
+  }
+  function unlockActions() {
+    $("cameraBtn").disabled = false;
+    $("galleryBtn").disabled = false;
+    $("submitBtn").disabled = !imageRef;
+    $("verifyMsg").textContent = "身份信息已填写，上传时由服务器核验（不匹配会被拒绝）。";
+    $("verifyMsg").className = "sub ok";
   }
   function tickCountdown() {
     if (!expiresAt) { return; }
@@ -134,6 +170,7 @@
     }
     $("session").textContent = data.session_label || data.session;
     $("period").textContent = data.period_key;
+    if (data.holder_name) { $("holderName").textContent = data.holder_name; }
     if (data.expires_at) {
       expiresAt = new Date(data.expires_at);
       tickCountdown();
@@ -146,18 +183,34 @@
       return;
     }
     $("state").textContent = "待打卡";
+    // 身份未确认前一律不许上传/提交（其他人打开只能看到提醒）
+    lockActions("请先填写本人手机号后 4 位完成身份验证。");
   }).catch(function () {
     say("网络异常，请稍后重试。", "err");
   });
 
+  $("verifyBtn").addEventListener("click", function () {
+    if (expired) { return; }
+    var tail = ($("verifyInput").value || "").trim();
+    if (!/^[0-9]{4}$/.test(tail)) {
+      lockActions("请填写 4 位数字（本人手机号后 4 位）。");
+      return;
+    }
+    verifyTail = tail;
+    verified = true;
+    unlockActions();
+  });
+
   function uploadFile(inputId) {
     if (expired) { say("链接已过期，请重新发送「打卡」获取新链接。", "err"); return; }
+    if (!verified) { say("请先填写本人手机号后 4 位完成身份核验。", "warn"); return; }
     var file = $(inputId).files[0];
     if (!file) { return; }
     $("fileName").textContent = "已选择：" + file.name;
     say("正在上传…", "");
     var form = new FormData();
     form.append("token", token);
+    form.append("verify", verifyTail);
     form.append("file", file);
     fetch("/api/h5/checkin/upload", { method: "POST", body: form })
       .then(function (r) { return r.json(); })
@@ -166,6 +219,12 @@
           imageRef = data.image_ref;
           $("submitBtn").disabled = false;
           say("图片已上传，可以提交。", "ok");
+        } else if (data && data.reason === "holder_mismatch") {
+          verified = false;
+          verifyTail = "";
+          imageRef = "";
+          lockActions(data.message || "身份不匹配，仅链接本人可上传。");
+          say(data.message || "身份不匹配。", "err");
         } else {
           say(data.message || "上传失败，请重试。", "warn");
         }
@@ -190,11 +249,18 @@
 
   $("submitBtn").addEventListener("click", function () {
     if (!imageRef) { say("请先上传打卡图片。", "warn"); return; }
+    if (!verified) { say("请先填写本人手机号后 4 位完成身份核验。", "warn"); return; }
     say("正在提交…", "");
-    post("/api/h5/checkin/submit", { token: token, image_ref: imageRef })
+    post("/api/h5/checkin/submit",
+         { token: token, image_ref: imageRef, verify: verifyTail })
       .then(function (data) {
         say(data.message || "", data.ok ? "ok" : (data.kind === "C" ? "warn" : "err"));
         if (data.ok) { $("submitBtn").disabled = true; $("state").textContent = "已完成"; }
+        if (data && data.reason === "holder_mismatch") {
+          verified = false;
+          verifyTail = "";
+          lockActions(data.message || "身份不匹配，仅链接本人可提交。");
+        }
       })
       .catch(function () { say("提交失败，请稍后重试。", "err"); });
   });

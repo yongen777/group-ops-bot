@@ -101,7 +101,11 @@ def _checkin_cell(rec, slot_id: str) -> Optional[dict]:
     return {"time": _clock(rec.get("checkin_time")),
             "status": status,
             "method": method,
-            "raw_status": raw_status}
+            "raw_status": raw_status,
+            # D17：后台凭证缩略图（图片本体在机器人数据目录，用
+            # /api/admin/uploads/{ref} 鉴权读取；⛔ 不走静态目录）
+            "image_ref": str(rec.get("image_ref") or ""),
+            "image_name": str(rec.get("image_name") or "")}
 
 
 def _summary_cell(rec) -> dict:
@@ -232,7 +236,7 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
                                   unknown["checkin"])
                 member["checkin"][slot["id"]] = {
                     "time": "", "status": st, "method": "",
-                    "raw_status": ""}
+                    "raw_status": "", "image_ref": "", "image_name": ""}
                 slot_seen += 1
                 if st == "overdue":
                     all_overdue = True

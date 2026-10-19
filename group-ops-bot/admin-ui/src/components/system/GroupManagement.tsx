@@ -319,10 +319,22 @@ export const GroupManagement: React.FC = () => {
 
   // ===================== 授权管理员 =====================
   const [adminQuery, setAdminQuery] = useState('');
+  const [grantQuery, setGrantQuery] = useState('');
   const [grantTarget, setGrantTarget] = useState('');
   const [revokeTarget, setRevokeTarget] = useState<AdminGrant | null>(null);
 
   const eligibleMembers = members.filter((m) => m.enabled && !grantPhones.has(m.user_id));
+
+  // 授权下拉的搜索过滤（姓名 / 手机号 / 岗位）
+  const grantOptions = (() => {
+    const query = grantQuery.trim();
+    if (!query) return eligibleMembers;
+    return eligibleMembers.filter((m) => (
+      (m.nickname || '').includes(query)
+      || m.user_id.includes(query)
+      || (m.role || '').includes(query)
+    ));
+  })();
 
   const grantAdmin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -1137,35 +1149,46 @@ export const GroupManagement: React.FC = () => {
               <span>授予群管理员身份</span>
             </h3>
 
-            <form onSubmit={grantAdmin} className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
-              <div className="sm:col-span-3">
-                <label className="font-semibold text-slate-700 block mb-1">
-                  选择群成员 <span className="text-blue-600 font-bold">*直接选择</span>
-                </label>
-                <select
-                  value={grantTarget}
-                  onChange={(e) => setGrantTarget(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500 focus:bg-white text-xs font-medium cursor-pointer"
-                >
-                  <option value="">-- 请选择要授权的群成员 --</option>
-                  {eligibleMembers.map((m) => (
-                    <option key={m.user_id} value={m.user_id}>
-                      {m.nickname || m.user_id} ({m.user_id}) - {m.role || '成员'}
-                    </option>
-                  ))}
-                </select>
-                {eligibleMembers.length === 0 && (
-                  <span className="text-[10px] text-slate-400 mt-1 block">
-                    当前所有在籍群成员均已获得管理员身份
-                  </span>
-                )}
+            <form onSubmit={grantAdmin} className="space-y-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">搜索群成员</label>
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="输入姓名或手机号筛选"
+                      value={grantQuery}
+                      onChange={(e) => setGrantQuery(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-2 outline-none focus:border-blue-500 focus:bg-white text-xs font-medium"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">选择群成员</label>
+                  <select
+                    value={grantTarget}
+                    onChange={(e) => setGrantTarget(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500 focus:bg-white text-xs font-medium cursor-pointer"
+                  >
+                    <option value="">-- 请选择要授权的群成员 --</option>
+                    {grantOptions.map((m) => (
+                      <option key={m.user_id} value={m.user_id}>
+                        {m.nickname || m.user_id}（{m.role || '成员'}）
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              <div className="flex items-end">
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <span className="text-[10px] text-slate-400">
+                  可授权成员 {grantOptions.length} 位
+                </span>
                 <button
                   type="submit"
                   disabled={!grantTarget}
-                  className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold cursor-pointer shadow-xs transition-colors flex items-center justify-center gap-1.5"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold cursor-pointer shadow-xs transition-colors flex items-center justify-center gap-1.5"
                 >
                   <ShieldCheck className="w-3.5 h-3.5" />
                   <span>授权为群管理员</span>
@@ -1199,7 +1222,6 @@ export const GroupManagement: React.FC = () => {
                     <th className="py-2.5 px-4">管理员姓名</th>
                     <th className="py-2.5 px-3">手机号码</th>
                     <th className="py-2.5 px-3">岗位</th>
-                    <th className="py-2.5 px-3">授权范围 (一体化)</th>
                     <th className="py-2.5 px-3">授权时间</th>
                     <th className="py-2.5 px-4 text-right">操作</th>
                   </tr>
@@ -1207,7 +1229,7 @@ export const GroupManagement: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {filteredGrants.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-400">
+                      <td colSpan={5} className="py-8 text-center text-slate-400">
                         暂无匹配的群管理员
                       </td>
                     </tr>
@@ -1234,12 +1256,6 @@ export const GroupManagement: React.FC = () => {
                           <td className="py-3 px-3 whitespace-nowrap">
                             <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 font-medium border border-blue-100">
                               {member?.role || '成员'}
-                            </span>
-                          </td>
-
-                          <td className="py-3 px-3 whitespace-nowrap">
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold">
-                              全业务管理与导出权限
                             </span>
                           </td>
 

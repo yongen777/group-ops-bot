@@ -310,11 +310,12 @@ class McpSseAdapter(Backend):
                                {"group_id": group_id, "period_key": period_key})
 
     def summary_save(self, *, user_id, group_id, period_key, period_type,
-                     content, request_id) -> dict:
+                     content, request_id, entry_source="user") -> dict:
         return self._call_tool("summary.save", {
             "user_id": user_id, "group_id": group_id,
             "period_key": period_key, "period_type": period_type,
-            "content": content, "request_id": request_id})
+            "content": content, "request_id": request_id,
+            "entry_source": entry_source})
 
     def summary_query_status(self, *, user_id, group_id, period_key) -> dict:
         return self._call_tool("summary.query_status", {
@@ -342,6 +343,29 @@ class McpSseAdapter(Backend):
     def op_query_by_request(self, *, request_id) -> dict:
         return self._call_tool("op.query_by_request",
                                {"request_id": request_id})
+
+    # ---------- 管理员修改既有记录（D17） ----------
+
+    def checkin_admin_update(self, *, user_id, group_id, period_key, session,
+                             checkin_time=None, status=None) -> dict:
+        return self._call_tool("checkin.admin_update", {
+            "user_id": user_id, "group_id": group_id,
+            "period_key": period_key, "session": session,
+            "checkin_time": checkin_time, "status": status})
+
+    def summary_admin_update(self, *, user_id, group_id, period_key,
+                             content=None, submit_time=None) -> dict:
+        return self._call_tool("summary.admin_update", {
+            "user_id": user_id, "group_id": group_id,
+            "period_key": period_key, "content": content,
+            "submit_time": submit_time})
+
+    def report_admin_update(self, *, user_id, group_id, period_key,
+                            items=None, submit_time=None) -> dict:
+        return self._call_tool("report.admin_update", {
+            "user_id": user_id, "group_id": group_id,
+            "period_key": period_key, "items": items,
+            "submit_time": submit_time})
 
     def close(self) -> None:
         with self._lock:

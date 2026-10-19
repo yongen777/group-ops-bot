@@ -32,9 +32,9 @@ export const App: React.FC<{ me: AdminMe }> = ({ me }) => {
 
   return (
     <AppProvider me={me}>
-      <div className="w-full min-h-screen bg-[#f8fafc] flex flex-col md:flex-row">
-        {/* 左侧导航（与参考后台一致的贴边工作台布局） */}
-        <aside className="w-full md:w-60 bg-white border-r border-slate-200/90 p-4 flex flex-col justify-between shrink-0 select-none">
+      <div className="w-full min-h-screen md:h-screen bg-[#f8fafc] flex flex-col md:flex-row md:overflow-hidden">
+        {/* 左侧导航（贴边工作台布局；桌面端锁定屏高、不可随页面滚动） */}
+        <aside className="w-full md:w-60 md:h-full bg-white border-r border-slate-200/90 p-4 flex flex-col justify-between shrink-0 select-none md:overflow-hidden">
           <div className="space-y-6">
             <div className="flex items-center gap-2.5 px-2 py-1.5 border-b border-slate-100 pb-3">
               <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-xs">
@@ -101,8 +101,8 @@ export const App: React.FC<{ me: AdminMe }> = ({ me }) => {
           </div>
         </aside>
 
-        {/* 右侧主内容区 */}
-        <main className="flex-1 bg-[#f7f8fa] p-4 lg:p-6 overflow-y-auto min-h-screen">
+        {/* 右侧主内容区（唯一可滚动区域） */}
+        <main className="flex-1 bg-[#f7f8fa] p-4 lg:p-6 overflow-y-auto min-h-screen md:min-h-0 md:h-full">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route
