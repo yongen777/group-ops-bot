@@ -47,7 +47,7 @@ def issue_report_token(tmp_db, now, cutoff="23:59"):
     backend = FakeBackend()
     ctx = ctx_at(tmp_db, backend, now)
     reply = report_handler.handle_command(commands.parse("报数"), ctx)
-    token = reply.split("#t=")[1]
+    token = reply.split("#t=")[1].split("\n")[0].strip()
     return backend, ctx, token
 
 
@@ -61,7 +61,8 @@ class TestReportDailyOnce:
             ctx, token, [{"field_id": 1, "quantity": 3}]).kind == KIND_A
         reply = report_handler.handle_command(
             commands.parse("报数"), ctx_at(tmp_db, backend, AM))
-        assert reply == "今日已提交报数，不可重复提交"
+        assert reply == ("今日已提交报数，不可重复提交；"
+                         "如需调整请联系后台管理员修改。")
         # ⛔ 没有第二个令牌
         rows = tmp_db._conn.execute(
             "SELECT token_id FROM tokens").fetchall()
@@ -165,7 +166,7 @@ class TestSummaryWholeDayWindow:
         saves = [c for c in backend.calls if c[0] == "summary_save"]
         assert len(saves) == 1
         # 成功走 @ 投递时返回空串（避免同话术出现两次）；未接通则回话术
-        assert reply == "" or "已成功保存" in reply
+        assert reply == "" or "已成功完成" in reply
         assert "已截至" not in reply
 
     def test_confirm_overwrite_after_old_cutoff_works(self, tmp_db):

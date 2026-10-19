@@ -37,7 +37,7 @@ BIZ = "stats"
 EXPORT_PERMISSION = "ADMIN_ALL"
 EXPORT_LABEL = {"checkin": "打卡", "summary": "总结", "report": "报数"}
 
-NOT_IN_WHITELIST_TEXT = "您没有导出权限，请联系管理员（导出需白名单授权）"
+NOT_IN_WHITELIST_TEXT = "您没有导出权限，请联系后台管理员授予权限。"
 QUERY_FAILED_TEXT = "统计查询失败（结果未知），请稍后重试"
 FILE_SEND_BLOCKED_TEXT = ("统计表已生成，但平台文件发送能力尚未接通，"
                           "暂无法在群内发送，请联系管理员")

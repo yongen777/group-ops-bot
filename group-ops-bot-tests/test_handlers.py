@@ -46,7 +46,7 @@ class TestSummary:
         prompt = summary_handler.handle_command(commands.parse("总结"), ctx)
         assert "请发送您的工作总结内容" in prompt
         reply = summary_handler.handle_pending_text(ctx)
-        assert reply == "✅ 您的日报已成功保存，辛苦啦！"
+        assert reply == "✅ 今日工作总结已成功完成。"
         name, kwargs = backend.calls[-1]
         assert name == "summary_save"
         assert kwargs["content"] == "今天修复了 3 个 bug"
@@ -102,7 +102,7 @@ class TestSummary:
         ctx2 = ctx_at(tmp_db, backend, AM + timedelta(minutes=5),
                       text="明天的发布计划已确认")
         reply2 = summary_handler.handle_pending_text(ctx2)
-        assert reply2 == "✅ 您的日报已成功保存，辛苦啦！"
+        assert reply2 == "✅ 今日工作总结已成功完成。"
         assert tmp_db.get_pending_session(GROUP, PHONE, "summary", AM) is None
 
     def test_period_mismatch_rejected(self, tmp_db):
@@ -144,7 +144,7 @@ def _issue_report_token(tmp_db, now):
     setup_fields(tmp_db)
     ctx = ctx_at(tmp_db, backend, now)
     reply = report_handler.handle_command(commands.parse("报数"), ctx)
-    token = reply.split("#t=")[1]
+    token = reply.split("#t=")[1].split("\n")[0].strip()
     return backend, ctx, token
 
 
@@ -275,7 +275,7 @@ class TestCheckin:
             ctx, token, self._upload(tmp_db, token), None)
         assert result.kind == KIND_A
         # 2026-10-16 四：三业务成功话术统一为总结格式风格
-        assert result.message == "✅ 您的上午打卡已成功完成，辛苦啦！"
+        assert result.message == "✅ 上午打卡已成功完成。"
         row = tmp_db.get_token(token_id_of(token))
         assert row["state"] == "consumed"
 

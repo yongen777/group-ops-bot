@@ -65,7 +65,7 @@ class TestTwoRoundOnly:
         backend = FakeBackend()
         enable_all(tmp_db)
         reply = submit(tmp_db, backend, AM, "今天完成了X")
-        assert reply == "✅ 您的日报已成功保存，辛苦啦！"
+        assert reply == "✅ 今日工作总结已成功完成。"
         assert len(_save_calls(backend)) == 1
 
 
@@ -74,7 +74,7 @@ class TestOverwriteConfirmation:
         backend = FakeBackend()
         enable_all(tmp_db)
         reply = submit(tmp_db, backend, AM, "第一版")
-        assert reply == "✅ 您的日报已成功保存，辛苦啦！"
+        assert reply == "✅ 今日工作总结已成功完成。"
         assert len(_save_calls(backend)) == 1
 
     def test_duplicate_prompts_confirmation(self, tmp_db):
@@ -176,7 +176,7 @@ class TestSummaryWholeDayWindow:
         # 10:00 >= 旧截止 10:00：现在应照常保存（整天执行）
         reply = submit(tmp_db, backend, AM, "今天完成了X")
         assert "已截至" not in reply
-        assert "已成功保存" in reply
+        assert "已成功完成" in reply
         assert len(_save_calls(backend)) == 1
 
     def test_before_daily_cutoff_ok(self, tmp_db):
@@ -184,7 +184,7 @@ class TestSummaryWholeDayWindow:
         enable_all(tmp_db)
         tmp_db.upsert_group_config(GROUP, daily_cutoff="10:30")
         reply = submit(tmp_db, backend, AM, "今天完成了X")  # 10:00 < 10:30
-        assert reply == "✅ 您的日报已成功保存，辛苦啦！"
+        assert reply == "✅ 今日工作总结已成功完成。"
 
     def test_confirm_crossing_old_cutoff_still_works(self, tmp_db):
         """确认期间跨过旧截止：照常覆盖（⛔ 不再有截止判定）。
@@ -210,7 +210,7 @@ class TestSummaryWholeDayWindow:
         night = datetime(2026, 10, 13, 22, 30, tzinfo=TZ)
         reply = submit(tmp_db, backend, night, "晚上补写的总结")
         assert "已截至" not in reply
-        assert "已成功保存" in reply
+        assert "已成功完成" in reply
 
     def test_weekly_period_sunday_ok(self, tmp_db):
         """周报：周日提交正常（周期键在周一 00:00 翻页，⛔ 不是截止拦截）。"""
@@ -218,7 +218,7 @@ class TestSummaryWholeDayWindow:
         enable_all(tmp_db, period_type="weekly")
         sunday = datetime(2026, 10, 18, 23, 0, tzinfo=TZ)  # 2026-W42 周日
         reply = submit(tmp_db, backend, sunday, "本周总结")
-        assert reply == "✅ 您的周报已成功保存，辛苦啦！"
+        assert reply == "✅ 本周工作总结已成功完成。"
 
 
 class TestSummaryAdminBackfill:
@@ -300,7 +300,7 @@ class TestSummaryMentionNotify:
         assert len(sender.pushed) == 1
         pushed = sender.pushed[-1]
         assert pushed["group_id"] == GROUP
-        assert pushed["text"] == "✅ 您的日报已成功保存，辛苦啦！"
+        assert pushed["text"] == "✅ 今日工作总结已成功完成。"
         assert pushed["mention_phones"] == [PHONE]
 
     def test_save_falls_back_to_plain_reply_when_push_unwired(self, tmp_db):
@@ -310,7 +310,7 @@ class TestSummaryMentionNotify:
         sender = RecordingSender()   # push_ok=False：未接通
         reply = submit(tmp_db, backend, AM, "今天修复了 3 个 bug",
                        sender=sender)
-        assert reply == "✅ 您的日报已成功保存，辛苦啦！"
+        assert reply == "✅ 今日工作总结已成功完成。"
         assert sender.pushed == []   # ⛔ 未伪造已推送
 
     def test_overwrite_pushes_group_mention(self, tmp_db):
@@ -326,7 +326,7 @@ class TestSummaryMentionNotify:
                    text="确认覆盖", sender=sender))
         assert reply == ""
         pushed = sender.pushed[-1]
-        assert pushed["text"] == "✅ 您的日报总结已成功覆盖更新。"
+        assert pushed["text"] == "✅ 今日工作总结已成功覆盖更新。"
         assert pushed["mention_phones"] == [PHONE]
         assert len(_save_calls(backend)) == 2
 
@@ -336,7 +336,7 @@ class TestSummaryMentionNotify:
         enable_all(tmp_db)
         reply = submit(tmp_db, backend, AM, "今天修复了 3 个 bug",
                        sender=_ExplodingSender())
-        assert reply == "✅ 您的日报已成功保存，辛苦啦！"
+        assert reply == "✅ 今日工作总结已成功完成。"
         assert tmp_db.has_successful_scope(
             scope_key(GROUP, PHONE, "summary", "2026-10-13"))
 
@@ -346,7 +346,7 @@ class TestSummaryMentionNotify:
         enable_all(tmp_db)
         submit(tmp_db, backend, AM, "第一版")
         reply = submit(tmp_db, backend, AM, "第二版")
-        assert reply == ("⚠️ 您在本周期内已提交过总结。如需覆盖更新，"
+        assert reply == ("⚠️ 您在今天内已提交过总结。如需覆盖更新，"
                          "请回复：@general-bot 确认覆盖")
 
     def test_cancel_after_ttl_reports_expired(self, tmp_db):

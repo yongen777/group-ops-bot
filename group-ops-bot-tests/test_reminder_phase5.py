@@ -289,7 +289,7 @@ class TestCPendingExclusion:
         backend.raise_on.add("report_submit")
         ctx = make_ctx(tmp_db, backend, cfg_for(tmp_db), now=AM, phone=phone)
         reply = report_handler.handle_command(commands.parse("报数"), ctx)
-        token = reply.split("#t=")[1]
+        token = reply.split("#t=")[1].split("\n")[0].strip()
         result = report_handler.submit_from_h5(
             ctx, token, [{"field_id": 1, "quantity": 1}])
         assert result.kind == KIND_C

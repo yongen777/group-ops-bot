@@ -8,7 +8,7 @@
    H5 页为「+ 添加报数字段」动态逐行、⛔ 无角色输入
 三、成功后群内 @ 通知（真实手机号）；重复提交不重复打扰；
    推送失败不改写 A/B/C 归类
-四、成功话术与打卡/总结同骨架（✅ 您的…已成功…，辛苦啦！）
+四、成功话术与打卡/总结统一（✅ …已成功完成。）
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ class TestSuccessNotify:
         assert len(sender.pushed) == 1
         assert sender.pushed[0]["mention_phones"] == [PHONE]
         assert sender.pushed[0]["text"] == \
-            "✅ 您的今日报数已成功提交，辛苦啦！"
+            "✅ 今日工作报数已成功完成。"
 
     def test_duplicate_does_not_re_notify(self, tmp_db):
         """安全重试（duplicate）-> ⛔ 不重复 @ 打扰。"""
@@ -165,7 +165,7 @@ class TestSuccessNotify:
         result = report_handler.submit_from_h5(
             ctx, token, [{"field_id": 1, "quantity": 3}])
         assert result.kind == KIND_A
-        assert result.message == "✅ 您的今日报数已成功提交，辛苦啦！"
+        assert result.message == "✅ 今日工作报数已成功完成。"
         assert sender.pushed == []  # ⛔ 不伪造已发送
 
     def test_no_sender_does_not_break(self, tmp_db):

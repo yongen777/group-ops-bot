@@ -129,7 +129,7 @@ class TestNoImageDirectSubmit:
         ctx = ctx_at(tmp_db, backend, EARLY_AM)
         reply = checkin_handler.handle_command(commands.parse("打卡"), ctx)
         # 2026-10-16 四：三业务成功话术统一为总结格式风格
-        assert reply == "✅ 您的上午打卡已成功完成，辛苦啦！"
+        assert reply == "✅ 上午打卡已成功完成。"
         # ⛔ 未签发令牌
         assert tmp_db._conn.execute(
             "SELECT COUNT(*) AS n FROM tokens").fetchone()["n"] == 0

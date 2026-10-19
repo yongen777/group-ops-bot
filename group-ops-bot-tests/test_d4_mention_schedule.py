@@ -236,9 +236,9 @@ class TestReminderTargets:
                               datetime(2026, 10, 16, 0, 1, tzinfo=TZ))
         assert pushed
         body = pushed[0]
-        assert "今日打卡提醒" in body
-        assert "今日打卡时间" in body
-        assert "前完成打卡" in body or "时段已结束" in body
+        assert "【打卡】未完成提醒" in body
+        assert "⏰ 截止时间：" in body
+        assert "（上午）" in body or "时段已结束" in body
 
 
 def _ctx(store, backend, now):

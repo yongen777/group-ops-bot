@@ -52,6 +52,7 @@ from typing import Optional
 from .. import period as period_mod
 from ..backend.base import Backend
 from ..state import StateStore
+from .base import BOT_MENTION_NAME
 
 BIZ = "reminder"
 
@@ -237,52 +238,62 @@ def compute_incomplete(ctx, group_id: str, biz: str, period_key: str,
     return targets
 
 
-def format_message(targets: list, text: str = "",
-                   window_text: str = "") -> str:
-    """提醒文案（2026-10-16 用户指令三：改为用户视角的分段结构）。
+_BIZ_LABEL = {"checkin": "打卡", "summary": "总结", "report": "报数"}
 
-    文案里的 ``@姓名(上午/下午)`` 是**名单展示文本**。
-    ⭐ 2026-10-17 用户指令：提醒**不再**走量子密信
-    ``textMsg.isMentioned / mentionedMobileList`` 平台 @（消息开头那个
-    @ 已按用户要求移除）—— 用户原话「移除第一个艾特用户的文本，
-    保留一个就行了」，即只保留本名单里的这一个。
-    ⛔ 不要把平台 @ 加回提醒推送（群聊回复的 @ 不受影响，见 server.py）。
+
+def format_message(targets: list, text: str = "",
+                   deadline_text: str = "",
+                   slot_names: Optional[dict] = None) -> str:
+    """提醒文案（⭐ 2026-10-19 用户指令：统一为固定五段式）。
+
+        @张三(上午) @李四(下午) 🔔 【打卡】未完成提醒
+        📋 待提交名单：
+        · 张三（上午）
+        · 李四（下午）
+        ⏰ 截止时间：12:00（上午）、14:50（下午）
+        👉 快速处理：请发送「@general-bot 打卡」完成提交。
+
+    ⚠️ 头部的 @姓名 是**文案内**的名单，⛔ 不是平台的 mention：
+    2026-10-17 用户指令「移除第一个艾特，保留一个」仍然有效，
+    推送时 ⛔ 不传 mention_phones（见 run_group）。
 
     text 非空 = 该业务配置的自定义文本（仍作为开头一行）。
-    window_text 非空 = 打卡时段与截止说明（打卡业务传入）。
+    deadline_text = 截止说明（打卡按时段结束时间；总结/报数固定今晚 24:00）。
+    slot_names = {时段 id: 时段名}，用于把 am/pm 显示成「上午/下午」。
     """
     if not targets:
         return ""
-    label = {"checkin": "打卡", "summary": "总结", "report": "报数"}
     names = []
     for t in targets:
         name = t.name or (t.phone[-4:].rjust(11, "*"))
         if t.session:
-            name = "%s(%s)" % (name, "上午" if t.session == "am" else "下午")
+            slot_label = (slot_names or {}).get(t.session) or (
+                "上午" if t.session == "am" else "下午")
+            name = "%s(%s)" % (name, slot_label)
         names.append(name)
-    biz_label = label.get(targets[0].biz, targets[0].biz)
+    biz = targets[0].biz
+    biz_label = _BIZ_LABEL.get(biz, biz)
     lines = []
     if text:
         lines.append(text)
-    lines.append("🔔 今日%s提醒" % biz_label)
-    lines.append("")
-    lines.append("以下成员还未完成今日%s：" % biz_label)
-    lines.append("")
+    # 头部：文案内 @ 名单（⛔ 不触发平台 mention）
+    lines.append("%s 🔔 【%s】未完成提醒"
+                 % (" ".join("@%s" % n for n in names), biz_label))
+    lines.append("📋 待提交名单：")
     for name in names:
-        lines.append("@%s" % name)
-    if window_text:
-        lines.append("")
-        lines.append(window_text)
-    lines.append("")
-    lines.append("请及时完成今日%s～" % biz_label)
+        lines.append("· %s" % name.replace("(", "（").replace(")", "）"))
+    if deadline_text:
+        lines.append("⏰ 截止时间：%s" % deadline_text)
+    lines.append("👉 快速处理：请发送「@%s %s」完成提交。"
+                 % (BOT_MENTION_NAME, biz_label))
     return "\n".join(lines)
 
 
-def _checkin_window_text(group_row, now: datetime, targets: list) -> str:
-    """打卡提醒的时段说明（用户指令三：文案含时段与截止时间）。
+def _checkin_deadline_text(group_row, now: datetime, targets: list) -> str:
+    """打卡截止说明（⭐ 2026-10-19：⏰ 行只写未结束时段的结束时刻）。
 
     ⛔ 只说**仍未结束**的时段：已结束时段不应再劝用户"请在 X 前完成"，
-    那种话已经无意义（截止时间已过）。全部已结束则退化为通用提示。
+    那种话已经无意义（截止时间已过）。全部已结束则给出补交出口。
     """
     from . import checkin as checkin_handler
     slots = checkin_handler.slots_from_row(group_row)
@@ -297,12 +308,9 @@ def _checkin_window_text(group_row, now: datetime, targets: list) -> str:
     open_slots = [s for s in slots
                   if s["id"] in wanted and s["id"] not in ended_ids]
     if open_slots:
-        windows = "、".join("%s-%s" % (s["start"], s["end"])
-                           for s in open_slots)
-        deadline = min(s["end"] for s in open_slots)
-        return ("今日打卡时间：%s\n请以上成员在 %s 前完成打卡，"
-                "逾期将无法提交。" % (windows, deadline))
-    return "今日打卡时段已结束，如需补交请联系群管理员。"
+        return "、".join("%s（%s）" % (s["end"], s["name"])
+                         for s in open_slots)
+    return "今日打卡时段已结束，如需补交请联系群管理员"
 
 
 def run_group(state: StateStore, backend: Backend, push, group_row,
@@ -411,11 +419,17 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
             continue   # ⛔ 全员门控未过 -> 一条都不发
         # ⭐ 只发**一条**合并消息（2026-10-16 用户指令五）：@ 未完成的全体，
         # ⛔ 不按 target 逐条循环发（原实现会对每个未完成者各发一条 N 条消息）。
-        # 打卡业务附时段与截止说明；已结束的时段不再提醒（due_* 只给已过时段）。
-        window_text = ""
+        # ⭐ 2026-10-19 用户指令：⏰ 截止时间统一 ——
+        #    打卡 = 未结束时段的结束时刻；总结 / 报数 = 固定今晚 24:00。
+        slot_names = {}
         if one == "checkin":
-            window_text = _checkin_window_text(group_row, now, fresh)
-        text = format_message(fresh, rule["text"], window_text)
+            from . import checkin as checkin_handler
+            slot_names = {s["id"]: s["name"]
+                          for s in checkin_handler.slots_from_row(group_row)}
+            deadline_text = _checkin_deadline_text(group_row, now, fresh)
+        else:
+            deadline_text = "今晚 24:00"
+        text = format_message(fresh, rule["text"], deadline_text, slot_names)
         # ⛔ 2026-10-17 用户指令：提醒推送**不再带平台 @**（mentionedMobileList）
         # —— 消息开头那个 @ 是量子密信按手机号渲染的，用户要求移除，
         # 只保留文案内「@姓名(上午/下午)」名单（format_message 已含，

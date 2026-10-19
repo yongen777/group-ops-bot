@@ -48,7 +48,7 @@ def issue_token(tmp_db, now, hhmm="23:59"):
     backend = FakeBackend()
     ctx = ctx_at(tmp_db, backend, now)
     reply = report_handler.handle_command(commands.parse("报数"), ctx)
-    token = reply.split("#t=")[1]
+    token = reply.split("#t=")[1].split("\n")[0].strip()
     return backend, ctx, token
 
 

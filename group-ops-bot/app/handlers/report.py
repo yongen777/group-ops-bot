@@ -54,9 +54,12 @@ LOG = logging.getLogger(__name__)
 BIZ = "report"
 
 NOT_ENABLED_TEXT = "本群未开启报数，请联系管理员"
-LINK_TEXT = "请点击链接填写今日报数：{url}"
-# 用户指令 2026-10-16 四：成功话术统一为总结格式风格（✅ 您的…已成功…，辛苦啦！）
-SUBMIT_OK_TEXT = "✅ 您的今日报数已成功提交，辛苦啦！"
+# 报数链接话术（⭐ 2026-10-19 用户指令：与打卡同口径，带有效期提醒）。
+# ⚠️ 有效期数字单一真源 = tokens.TOKEN_TTL_MINUTES，⛔ 不另写死 30。
+LINK_TEXT = ("请点击链接填写今日报数：{url}\n"
+             "（链接 {ttl} 分钟内有效，逾期失效，需重新发送「报数」）")
+# 用户指令 2026-10-19：完成话术统一为陈述句（⛔ 不再「您的…辛苦啦」）。
+SUBMIT_OK_TEXT = "✅ 今日工作报数已成功完成。"
 EMPTY_ITEMS_TEXT = "请至少添加一个要报的字段"
 UNKNOWN_FIELD_TEXT = "包含不存在或已停用的字段，请刷新页面后重试"
 BAD_QUANTITY_TEXT = "数量必须是不小于 0 的整数，请检查「{name}」"
@@ -108,7 +111,7 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
                                    expires_at=expires_at)
     ctx.state.put_token(record)
     url = "%s/h5/report#t=%s" % (ctx.config.external_base_url, value)
-    return LINK_TEXT.format(url=url)
+    return LINK_TEXT.format(url=url, ttl=tokens_mod.TOKEN_TTL_MINUTES)
 
 
 def default_role(ctx: HandlerContext) -> Optional[str]:

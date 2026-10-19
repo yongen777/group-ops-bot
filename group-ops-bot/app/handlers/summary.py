@@ -47,9 +47,9 @@ import logging
 from typing import Optional
 
 from .. import commands, period as period_mod
-from .base import (KIND_A, KIND_B, KIND_C, HandlerContext, SubmitResult,
-                   biz_enabled, ensure_user_id, group_period_type,
-                   run_submission, scope_key)
+from .base import (KIND_A, KIND_B, KIND_C, BOT_MENTION_NAME, HandlerContext,
+                   SubmitResult, biz_enabled, ensure_user_id,
+                   group_period_type, run_submission, scope_key)
 
 LOG = logging.getLogger("group-ops.summary")
 
@@ -77,25 +77,46 @@ def expired_prompt(ttl_minutes: int) -> str:
 # ⭐ 2026-10-17 用户指令六：等待输入期间可主动放弃（与绑定两轮同口径）
 SUMMARY_CANCELED_TEXT = "已取消本次总结提交，如需提交请重新发送「总结」。"
 
-# 机器人在量子密信平台的名称（2026-10-16 用户实测截图：@general-bot）。
-# ⚠️ 平台载荷不含机器人名（adapter 只映射 groupId/phone/textMsg/callBackUrl/
-# userName），故按实测写为常量；日后机器人更名只需改这一处。
-BOT_MENTION_NAME = "general-bot"
+# 机器人在量子密信平台的名称统一由 base.BOT_MENTION_NAME 提供（⛔ 不再本地定义，
+# 否则提醒文案与覆盖提示会各写一个，改名时必然漏掉一处）。
 
-# 保存 / 覆盖成功话术（2026-10-16 用户指令四；%s = 日报 / 周报）
-SAVED_TEXT = "✅ 您的%s已成功保存，辛苦啦！"
+# 成功 / 覆盖话术（⭐ 2026-10-19 用户指令：统一点名「今日 / 本周工作总结」，
+# ⛔ 不再用「您的日报已成功保存，辛苦啦」这类各写一套的句式）
+_PERIOD_WORD = {period_mod.PERIOD_DAILY: "今日",
+                period_mod.PERIOD_WEEKLY: "本周"}
+
+
+def saved_text(ptype: str) -> str:
+    """总结保存成功（用户指令 2026-10-19：✅ 今日工作总结已成功完成。）。"""
+    return "✅ %s工作总结已成功完成。" % _PERIOD_WORD.get(ptype, "今日")
+
+
+def overwrite_done_text(ptype: str) -> str:
+    return "✅ %s工作总结已成功覆盖更新。" % _PERIOD_WORD.get(ptype, "今日")
+
+
+def overwrite_prompt(ptype: str) -> str:
+    """重复提交提示：日报说「今天」、周报说「本周期」（用户指令 2026-10-19）。
+
+    ⛔ 两种周期的措辞不得混用：日报写「本周期」会被用户当成周报。
+    """
+    when = "今天" if ptype == period_mod.PERIOD_DAILY else "本周期"
+    return ("⚠️ 您在%s内已提交过总结。如需覆盖更新，"
+            "请回复：@%s 确认覆盖" % (when, BOT_MENTION_NAME))
+
 
 # 覆盖确认流（用户指令第三阶段）
 OVERWRITE_CONFIRM_TTL_MINUTES = 10
-OVERWRITE_PROMPT = ("⚠️ 您在本周期内已提交过总结。如需覆盖更新，"
-                    "请回复：@%s 确认覆盖" % BOT_MENTION_NAME)
 CONFIRM_OVERWRITE_TEXT = "确认覆盖"
 CANCEL_TEXT = "取消"
-OVERWRITE_DONE_TEXT = "✅ 您的%s总结已成功覆盖更新。"
 OVERWRITE_CANCELED_TEXT = "已保留原有总结，未做修改"
 OVERWRITE_EXPIRED_TEXT = "确认已超时失效，请重新发送「总结」提交新内容"
-OVERWRITE_REPROMPT_TEXT = ("请回复「确认覆盖」以覆盖本周期总结，"
-                           "回复「取消」保留原有总结")
+
+
+def overwrite_reprompt(ptype: str = "") -> str:
+    when = "今天" if ptype == period_mod.PERIOD_DAILY else "本周期"
+    return ("请回复「确认覆盖」以覆盖%s总结，"
+            "回复「取消」保留原有总结" % when)
 
 # ⭐ 2026-10-19 用户指令：总结**整天为执行时间，⛔ 不再使用截止时间**。
 # 旧的「超过截止 -> 已截至，请找管理员补交」分支已删除：日期 / 周键本身就是
@@ -147,7 +168,7 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
             ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)
             return OVERWRITE_CANCELED_TEXT
         # 其他文本：⛔ 不当新总结内容（防误覆盖），重新提示
-        return OVERWRITE_REPROMPT_TEXT
+        return overwrite_reprompt(payload.get("period_type") or "")
     # ---- 两轮内容提交 ----
     if text == CANCEL_TEXT:
         # ⭐ 2026-10-17 用户指令六：等待输入期间可主动放弃（不占满 TTL）
@@ -189,11 +210,11 @@ def _submit_and_reply(ctx: HandlerContext, ptype: str, content: str) -> str:
             ttl_minutes=OVERWRITE_CONFIRM_TTL_MINUTES,
             payload={"mode": "overwrite", "period_type": ptype,
                      "content": content})
-        return OVERWRITE_PROMPT
+        return overwrite_prompt(ptype)
     ok, message = _save(ctx, ptype, content)
     if not ok:
         return message
-    return _deliver(ctx, SAVED_TEXT % _PERIOD_TO_ARG[ptype])
+    return _deliver(ctx, saved_text(ptype))
 
 
 def _do_overwrite(ctx: HandlerContext, ptype: str, content: str) -> str:
@@ -208,7 +229,7 @@ def _do_overwrite(ctx: HandlerContext, ptype: str, content: str) -> str:
     ok, message = _save(ctx, ptype, content)
     if not ok:
         return message
-    return _deliver(ctx, OVERWRITE_DONE_TEXT % _PERIOD_TO_ARG[ptype])
+    return _deliver(ctx, overwrite_done_text(ptype))
 
 
 def _notify_group_summary(ctx: HandlerContext, text: str) -> bool:

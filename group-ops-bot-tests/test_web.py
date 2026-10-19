@@ -105,7 +105,7 @@ class TestCallback:
         assert "请发送您的工作总结内容" in sender.sent[-1]["text"]
         client.post("/api/callback",
                     json=callback_payload("今天完成了登录模块"))
-        assert "已成功保存" in sender.sent[-1]["text"]
+        assert "已成功完成" in sender.sent[-1]["text"]
 
     def test_command_preempts_pending(self, tmp_db):
         """有待处理总结时发新命令 -> 走命令，pending 保留。"""
@@ -147,7 +147,7 @@ class TestH5Report:
         result = submit.json()
         assert result["ok"] is True and result["kind"] == "A"
         # 用户指令四：成功话术统一为总结格式风格
-        assert result["message"] == "✅ 您的今日报数已成功提交，辛苦啦！"
+        assert result["message"] == "✅ 今日工作报数已成功完成。"
         names = [c[0] for c in backend.calls]
         assert "report_submit" in names
         # 角色服务端派生：应交名单配置优先（⛔ 不信客户端回传）
@@ -156,7 +156,7 @@ class TestH5Report:
         # 用户指令三：成功后群内 @ 通知（真实手机号，⛔ 不靠文本假装 @）
         assert len(sender.pushed) == 1
         assert sender.pushed[0]["mention_phones"] == [PHONE]
-        assert sender.pushed[0]["text"] == "✅ 您的今日报数已成功提交，辛苦啦！"
+        assert sender.pushed[0]["text"] == "✅ 今日工作报数已成功完成。"
 
     def test_bad_token(self, tmp_db):
         app, _b, _s = make_app(tmp_db)
@@ -245,7 +245,7 @@ class TestH5CheckinUpload:
         assert len(sender.pushed) == 1
         assert sender.pushed[0]["mention_phones"] == [PHONE]
         # 用户指令四（2026-10-16）：三业务成功话术统一为总结格式风格
-        assert sender.pushed[0]["text"] == "✅ 您的上午打卡已成功完成，辛苦啦！"
+        assert sender.pushed[0]["text"] == "✅ 上午打卡已成功完成。"
         # 凭证标记已引用（审计 / 清理用）
         assert tmp_db.get_upload(ref)["consumed"] == 1
 
