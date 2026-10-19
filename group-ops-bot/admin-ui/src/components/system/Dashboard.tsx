@@ -38,6 +38,37 @@ function todayStr(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+/** 凭证缩略图：加载失败（超过保留期）时退回文字，⛔ 不留破图 */
+const ProofThumb: React.FC<{ refId: string; onOpen: () => void }> = ({ refId, onOpen }) => {
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => setFailed(false), [refId]);
+  if (failed) {
+    return <span className="text-slate-400 text-[11px]">凭证已过保留期</span>;
+  }
+  return (
+    <button
+      onClick={onOpen}
+      className="flex items-center gap-2 group cursor-pointer"
+      title="点击查看凭证大图"
+    >
+      <span className="relative w-8 h-8 rounded-lg overflow-hidden border border-slate-200 group-hover:ring-2 group-hover:ring-blue-500 transition-all shrink-0 bg-slate-100 flex items-center justify-center">
+        <img
+          src={`/api/admin/uploads/${encodeURIComponent(refId)}`}
+          alt="打卡凭证"
+          onError={() => setFailed(true)}
+          className="w-full h-full object-cover"
+        />
+        <span className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+          <Eye className="w-3.5 h-3.5 text-white" />
+        </span>
+      </span>
+      <span className="text-[11px] text-blue-600 group-hover:text-blue-800 font-medium">
+        查看大图
+      </span>
+    </button>
+  );
+};
+
 const AVATAR_COLORS = [
   'bg-blue-600', 'bg-emerald-600', 'bg-indigo-600', 'bg-purple-600',
   'bg-pink-600', 'bg-amber-600', 'bg-teal-600', 'bg-rose-500',
@@ -685,25 +716,10 @@ export const Dashboard: React.FC = () => {
                         })}
                         <td className="py-3 px-3 whitespace-nowrap">
                           {proofSlot ? (
-                            <button
-                              onClick={() => openCheckinImage(m, proofSlot.id, proofSlot.name)}
-                              className="flex items-center gap-2 group cursor-pointer"
-                              title="点击查看凭证大图"
-                            >
-                              <span className="relative w-8 h-8 rounded-lg overflow-hidden border border-slate-200 group-hover:ring-2 group-hover:ring-blue-500 transition-all shrink-0 bg-slate-100 flex items-center justify-center">
-                                <img
-                                  src={`/api/admin/uploads/${encodeURIComponent(String(m.checkin[proofSlot.id]!.image_ref))}`}
-                                  alt="打卡凭证"
-                                  className="w-full h-full object-cover"
-                                />
-                                <span className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                  <Eye className="w-3.5 h-3.5 text-white" />
-                                </span>
-                              </span>
-                              <span className="text-[11px] text-blue-600 group-hover:text-blue-800 font-medium">
-                                查看大图
-                              </span>
-                            </button>
+                            <ProofThumb
+                              refId={String(m.checkin[proofSlot.id]!.image_ref)}
+                              onOpen={() => openCheckinImage(m, proofSlot.id, proofSlot.name)}
+                            />
                           ) : (
                             <span className="text-slate-400 text-[11px]">暂无图片</span>
                           )}
