@@ -260,10 +260,15 @@ class McpSseAdapter(Backend):
             raise BackendError("MCP tool %s JSON-RPC error %s: %s"
                                % (name, err.get("code"), err.get("message")))
         result = message.get("result") or {}
-        if result.get("isError"):
-            raise BackendError("MCP tool %s returned isError" % name)
         texts = [part.get("text", "") for part in result.get("content", [])
                  if isinstance(part, dict) and part.get("type") == "text"]
+        if result.get("isError"):
+            # ⭐ 2026-10-20：把工具侧错误正文带出来。旧实现只抛
+            # 「returned isError」，日志里全无原因；线上一次 `queue.Empty`
+            # （str 为空串）就这样变成「后台没数据」的黑盒，查了半小时。
+            detail = " ".join(t for t in texts if t).strip()[:300]
+            raise BackendError("MCP tool %s returned isError: %s"
+                               % (name, detail or "(empty detail)"))
         if not texts:
             raise BackendError("MCP tool %s returned no text content" % name)
         try:

@@ -10,16 +10,19 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from contextlib import contextmanager
-from queue import LifoQueue
+from queue import Empty, LifoQueue
 from typing import Optional
 
 import pymysql
 import pymysql.err
 
 from app.config import MysqlConfig, load_mysql_config
+
+LOG = logging.getLogger("group-ops.mcp.pool")
 
 
 class PoolError(RuntimeError):
@@ -35,6 +38,9 @@ class MysqlPool:
         self._idle: LifoQueue = LifoQueue()
         self._lock = threading.Lock()
         self._created = 0
+        # 已借出（含正在 ping）的连接数：与 _created 一起维持
+        # 「_created = 空闲 + 借出」不变式，才分得清「真的都在忙」和「计数漂移」
+        self._borrowed = 0
         self._closed = False
 
     def _connect(self) -> pymysql.connections.Connection:
@@ -58,14 +64,41 @@ class MysqlPool:
         with self._lock:
             if self._closed:
                 raise PoolError("pool is closed")
+            # ⭐ 计数漂移自愈（2026-10-20）：空闲队列为空、无人借出、但计数
+            # 已到上限 —— 这个组合不可能是「真的都在忙」，只能是历史泄漏
+            # （建连失败 / 借出异常未归还）。直接清零重来，⛔ 不回退无库模式。
+            if (self._created >= self._size and self._borrowed == 0
+                    and self._idle.empty()):
+                LOG.warning(
+                    "mysql pool counter drifted (created=%s, borrowed=0, idle=0)"
+                    " -> resetting to 0", self._created)
+                self._created = 0
+        conn = None
         try:
             conn = self._idle.get_nowait()
-        except Exception:
+            with self._lock:
+                self._borrowed += 1
+        except Empty:
             with self._lock:
                 if self._created < self._size:
                     self._created += 1
-                    return self._connect()
-            conn = self._idle.get(timeout=10)  # 达到上限则等待归还
+                    try:
+                        conn = self._connect()
+                    except BaseException:
+                        # ⭐ 建连失败必须归还计数。旧代码 `_created += 1;
+                        # return self._connect()` 一旦抛错就永久多记一个
+                        # （MySQL 抖动 5 次 = 计数打满且空闲队列为空）→ 之后
+                        # 每次调用卡满 10 秒并抛 `queue.Empty`（str 为空串），
+                        # **MySQL 恢复后也永不自愈**，只能重启进程。
+                        # 2026-10-19 18:00 线上 314 次调度失败 + 后台全量
+                        # 取不到数据即此因。
+                        self._created -= 1
+                        raise
+                    self._borrowed += 1
+            if conn is None:
+                conn = self._idle.get(timeout=10)  # 达到上限则等待归还
+                with self._lock:
+                    self._borrowed += 1
         try:
             conn.ping(reconnect=True)
         except pymysql.err.MySQLError:
@@ -77,6 +110,8 @@ class MysqlPool:
         return conn
 
     def _release(self, conn: pymysql.connections.Connection) -> None:
+        with self._lock:
+            self._borrowed -= 1
         if self._closed:
             try:
                 conn.close()
@@ -107,6 +142,7 @@ class MysqlPool:
                     pass
                 with self._lock:
                     self._created -= 1
+                    self._borrowed -= 1
 
     def close(self) -> None:
         with self._lock:

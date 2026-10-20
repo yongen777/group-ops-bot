@@ -16,9 +16,11 @@ interface Props {
   onSaved: (message: string) => void;
 }
 
+// ⭐ 2026-10-20 用户口径：管理员编辑只有两种状态可选
+// 「正常完成」/「后台补录」。⛔ 移除「迟到补卡」（LATE 仅在历史数据里
+// 如实展示，不再作为可选项写入）。
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'NORMAL', label: '正常完成' },
-  { value: 'LATE', label: '迟到补卡' },
   { value: 'ADMIN_EDIT', label: '后台补录' },
 ];
 

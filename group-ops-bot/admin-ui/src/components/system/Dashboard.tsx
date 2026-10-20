@@ -608,7 +608,6 @@ export const Dashboard: React.FC = () => {
                   ))}
                   <th className="py-2.5 px-3">今日总结</th>
                   <th className="py-2.5 px-3">今日报数</th>
-                  <th className="py-2.5 px-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -651,16 +650,6 @@ export const Dashboard: React.FC = () => {
                             </div>
                           )}
                         </td>
-                        <td className="py-3 px-3 whitespace-nowrap text-right">
-                          <button
-                            onClick={() => setEditTarget({ member: m, biz: 'checkin' })}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-semibold cursor-pointer transition-colors shadow-2xs"
-                            title="管理员修改并保存入库"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                            <span>编辑</span>
-                          </button>
-                        </td>
                       </tr>
                     );
                   })}
@@ -696,39 +685,43 @@ export const Dashboard: React.FC = () => {
                   <tr>
                     <th className="py-2.5 px-3.5">全部用户</th>
                     {slots.map((slot) => (
-                      <th key={slot.id} className="py-2.5 px-3">{slot.name}打卡时间</th>
+                      <React.Fragment key={slot.id}>
+                        <th className="py-2.5 px-3">{slot.name}打卡时间</th>
+                        <th className="py-2.5 px-3">{slot.name}凭证</th>
+                      </React.Fragment>
                     ))}
-                    <th className="py-2.5 px-3">打卡凭证图片</th>
                     <th className="py-2.5 px-3">完成状态</th>
                     <th className="py-2.5 px-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {members.filter(matches).map((m) => {
-                    const proofSlot = slots.find((slot) => m.checkin[slot.id]?.image_ref);
                     return (
                       <tr key={m.user_id} className="hover:bg-slate-50/60 transition-colors">
                         <td className="py-3 px-3.5 whitespace-nowrap">{memberCell(m)}</td>
                         {slots.map((slot) => {
                           const cell = m.checkin[slot.id];
+                          const refId = String(cell?.image_ref || '');
                           return (
-                            <td key={slot.id} className="py-3 px-3 whitespace-nowrap">
-                              <div className="font-mono font-bold text-slate-800">
-                                {cell?.time || <span className="text-slate-400 font-normal">未打卡</span>}
-                              </div>
-                            </td>
+                            <React.Fragment key={slot.id}>
+                              <td className="py-3 px-3 whitespace-nowrap">
+                                <div className="font-mono font-bold text-slate-800">
+                                  {cell?.time || <span className="text-slate-400 font-normal">未打卡</span>}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 whitespace-nowrap">
+                                {refId ? (
+                                  <ProofThumb
+                                    refId={refId}
+                                    onOpen={() => openCheckinImage(m, slot.id, slot.name)}
+                                  />
+                                ) : (
+                                  <span className="text-slate-400 text-[11px]">暂无图片</span>
+                                )}
+                              </td>
+                            </React.Fragment>
                           );
                         })}
-                        <td className="py-3 px-3 whitespace-nowrap">
-                          {proofSlot ? (
-                            <ProofThumb
-                              refId={String(m.checkin[proofSlot.id]!.image_ref)}
-                              onOpen={() => openCheckinImage(m, proofSlot.id, proofSlot.name)}
-                            />
-                          ) : (
-                            <span className="text-slate-400 text-[11px]">暂无图片</span>
-                          )}
-                        </td>
                         <td className="py-3 px-3 whitespace-nowrap">
                           {statusCell(m.checkin_status, m, 'checkin')}
                         </td>
