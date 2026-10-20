@@ -332,13 +332,31 @@ def _instance_row(state: StateStore, group_id: str):
     return row
 
 
+def _row_get(row, key: str, default=None):
+    """按列名取 sqlite3.Row 的值（⛔ 缺列不抛异常，返回 default）。
+
+    用途：`_instance_payload` 既要能吃掉带 `group_name` 的新行（LEFT JOIN
+    群配置），也要能吃掉只 `SELECT *` 的旧形态行（测试里的裸实例行）。
+    """
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return default
+
+
 def _instance_payload(row) -> dict:
     """实例行 -> API 载荷（凭证掩码硬约束：⛔ 不返回密文列、不返回明文、
-    不返回长度线索 —— webhook_key_masked 固定 "****" 或 null）。"""
+    不返回长度线索 —— webhook_key_masked 固定 "****" 或 null）。
+
+    ⭐ 2026-10-20：额外返回 `group_name`（群配置里用户绑定时录入的群名）。
+    前端显示优先级 display_name（后台备注名）-> group_name -> group_id，
+    修掉「群里录入了群名、后台却显示群 ID」的问题。
+    """
     key_set = bool(row["webhook_key_encrypted"])
     return {
         "group_id": row["group_id"],
         "display_name": row["display_name"],
+        "group_name": _row_get(row, "group_name"),
         "webhook_base_url": row["webhook_base_url"],
         "webhook_key_set": key_set,
         "webhook_key_masked": "****" if key_set else None,

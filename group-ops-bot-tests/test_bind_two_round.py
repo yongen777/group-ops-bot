@@ -8,7 +8,7 @@
 - 「取消」-> 清等待态 + 告知已取消
 - 命令类消息 ⛔ 不作群名（明确提示，避免静默吞用户命令）
 - 空文本 / 超长群名 -> 保留等待态让用户重发
-- 二次鉴权：等待期内被移出管理员名单 -> 拒绝 + 留痕
+- 二次鉴权已移除（2026-10-20 用户指令：全体群成员可绑定，⛔ 再看手机号名单）
 - 等待期被后台一键绑定 -> 不重复建，告知已绑定
 - 回调链路：两轮都回话且都 @ 发送者
 """
@@ -65,13 +65,18 @@ class TestRoundOne:
         ).fetchall()
         assert len(rows) == 0
 
-    def test_round_one_non_admin_rejected_without_prompt(self, tmp_db):
+    def test_round_one_any_member_gets_prompt(self, tmp_db):
+        """⭐ 2026-10-20 用户指令：全体群成员都能触发绑定（不再看手机号名单）。
+
+        用户实测「还没授权任何群成员为管理员，郑佳也能绑定」，确认这是期望语义。
+        """
         backend = FakeBackend()
         reply = first_round(tmp_db, backend, phone=OTHER_PHONE)
-        assert "无权执行绑定" in reply
-        # ⛔ 非管理员不进两轮（不挂等待态）
+        assert "请输入要绑定的群名称" in reply
+        assert "无权执行绑定" not in reply
+        # 任何成员都进两轮（挂等待态）
         assert tmp_db.get_pending_session(NEW_GROUP, OTHER_PHONE,
-                                         "bind", NOW) is None
+                                         "bind", NOW) is not None
 
     def test_round_one_disabled_group_not_prompted(self, tmp_db):
         backend = FakeBackend()
@@ -185,20 +190,23 @@ class TestRoundTwo:
         assert tmp_db.get_pending_session(NEW_GROUP, ADMIN_PHONE,
                                          "bind", NOW) is not None
 
-    def test_second_round_rechecks_admin(self, tmp_db):
-        """等待期内管理员名单被改（⛔ 不靠第一轮结论）。"""
+    def test_second_round_no_admin_recheck(self, tmp_db):
+        """⭐ 2026-10-20：第二轮不再复核手机号名单（名单已不参与判定）。
+
+        原口径是「等待期名单被改 -> 拒绝 + 留痕」，现改为全员可绑定，
+        故第二轮只保留「已被后台绑定 / 群名非法」两类护栏。
+        """
         backend = FakeBackend()
         first_round(tmp_db, backend)
-        # 第二轮时已不在名单
         reply = second_round(tmp_db, backend, "群C", bind_admins=())
-        assert "无权执行绑定" in reply
-        assert tmp_db.get_group_config(NEW_GROUP) is None
+        assert "绑定成功" in reply
+        assert tmp_db.get_group_config(NEW_GROUP) is not None
         assert tmp_db.get_pending_session(NEW_GROUP, ADMIN_PHONE,
                                          "bind", NOW) is None
         events = tmp_db._conn.execute(
             "SELECT * FROM security_event WHERE event_type='bind_unauthorized'"
         ).fetchall()
-        assert len(events) == 1
+        assert events == []
 
     def test_already_bound_during_wait(self, tmp_db):
         """等待期被后台一键绑定 -> 不重复建，告知已绑定。"""

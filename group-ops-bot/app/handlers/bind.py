@@ -17,11 +17,17 @@
   ⭐ 2026-10-17 用户指令六：焦点 TTL（默认 30 分钟，可配置）过期后，
   下一条非命令文本得到**明确超时提示**，⛔ 不静默失效
 
-鉴权（fail-closed，**两轮各判一次**）：
-1. 群内「绑定」：发送人手机号必须在 GOPS_BIND_ADMIN_PHONES（config.bind_admin_phones）
-   —— 未配置时群内绑定全员不可用，⛔ 不静默放行；⛔ 等待期名单若被改动，
-   第二轮会**再判一次**（不靠第一轮的结论）
-2. 管理后台「发现但未绑定」一键绑定：admin 会话鉴权（app/admin/api.py）
+鉴权（⭐ 2026-10-20 用户指令：**全体群成员都可触发绑定**）：
+- 群内「绑定」不再校验发送人手机号 —— 原先要求手机号在
+  GOPS_BIND_ADMIN_PHONES（config.bind_admin_phones）内，用户实测「还没授权
+  任何群成员为管理员，郑佳却能绑定」，据此确认期望语义是「本群任何成员都能
+  接入机器人」；`bind_admin_phones` 仅作历史配置保留，⛔ 不再参与判定。
+- 仍保留的护栏（与服务对象无关，任何绑定人都一样）：
+  ① 已绑定 -> 明确告知已绑定，⛔ 不重复建、不改配置
+  ② 实例被停用（status=DISABLED）-> 拒绝，⛔ 不借绑定命令暗中重新启用
+  ③ 群标识缺失 / 群名空 / 群名超长 -> fail-closed 拒绝
+  ④ 绑定成功写 `bind_admins=[发送人手机号]` + `security_event('group_bound')`
+- 管理后台「发现但未绑定」一键绑定：admin 会话鉴权（app/admin/api.py）
 
 幂等：已绑定（active）-> 明确告知已绑定，⛔ 不重复建、不改配置；
 已停用 -> 指引去后台启用（⛔ 不借绑定命令暗中重新启用）。
@@ -54,10 +60,13 @@ BOUND_COMMANDS_GUIDE = ("可用命令如下：\n"
 # ⭐ 未绑定群统一引导（2026-10-19 用户指令：⛔ 不再静默）
 # 正文里的 @机器人名 由 base.BOT_MENTION_NAME 单一真源注入；回推由
 # sender 另外按 mention_phones 真正 @ 发送者（⛔ 不靠正文假装 @）。
-# ⭐ 2026-10-20 用户指令：一律称「后台管理员」—— 群管理员 ≠ 后台管理员，
-# 前者在群里有管理权限但没有后台权限，写成「群管理员」会让人找错人。
-UNBOUND_TEXT = ("本群尚未接入机器人，请后台管理员发送「@%s 绑定」"
-                "完成配置后再使用。" % BOT_MENTION_NAME)
+# ⭐ 2026-10-20 用户指令：凡指「后台」的人一律写「后台管理员」—— 群管理员 ≠
+# 后台管理员，前者在群里有管理权限但没有后台权限，写成「群管理员」会找错人。
+# ⭐ 2026-10-20 用户指令（后一条，覆盖上面这条的落点）：绑定对**全体群成员**
+# 开放 —— 未绑定群引导语改成「本群任一成员均可操作」。原文写「请后台管理员
+# 发送」，会让普通成员以为自己不能绑，与放开后的口径矛盾。
+UNBOUND_TEXT = ("本群尚未接入机器人，请发送「@%s 绑定」完成接入"
+                "（本群任一成员均可操作）。" % BOT_MENTION_NAME)
 # 已绑定但被停用：与「未绑定」区分（⛔ 不能骗用户去绑定，绑定也救不回停用群）
 DISABLED_GROUP_TEXT = ("本群机器人已停用，请联系后台管理员在管理后台"
                        "将群状态改为启用后再使用。")
@@ -69,7 +78,8 @@ def bound_text(group_id: str) -> str:
 ALREADY_BOUND_TEXT = "本群已绑定，无需重复绑定（群标识 {gid}）"
 DISABLED_TEXT = ("本群已被停用（群标识 {gid}）。"
                  "请在管理后台将状态改为 active 后使用，⛔ 不能通过绑定命令重新启用")
-NOT_ADMIN_TEXT = "无权执行绑定：仅绑定管理员可用（如需授权请联系运维配置）"
+# ⭐ 2026-10-20：原 `NOT_ADMIN_TEXT`（无权执行绑定）已随手机号名单判定一起
+# 移除 —— 用户确认绑定对**本群全体成员**开放（见模块 docstring 鉴权段）。
 EMPTY_GROUP_TEXT = "绑定失败：回调里没有群标识"
 INSTANCE_DISABLED_TEXT = ("本群机器人实例已停用，请先到管理后台启用后再绑定。")
 
@@ -98,12 +108,6 @@ MAX_GROUP_NAME_LEN = 64
 INSTANCE_DISABLED = "DISABLED"
 
 
-def _is_bind_admin(ctx: HandlerContext) -> bool:
-    """群内绑定鉴权：手机号在配置的绑定管理员名单内（fail-closed）。"""
-    phones = getattr(ctx.config, "bind_admin_phones", ()) or ()
-    return ctx.phone in tuple(phones)
-
-
 def handle_command(parsed, ctx: HandlerContext) -> str:
     """「绑定」入口（第 1 轮）。⛔ 不做任何业务判定，只负责群接入。
 
@@ -121,13 +125,8 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
         # 幂等：已绑定 -> ⛔ 不进两轮（避免用户以为要再输一次群名）
         return ALREADY_BOUND_TEXT.format(gid=ctx.group_id)
 
-    if not _is_bind_admin(ctx):
-        # 越权绑定尝试留痕（⛔ 不回复群配置细节）
-        ctx.state.record_security_event(
-            "bind_unauthorized", ctx.group_id, ctx.phone,
-            "bind command from non-admin phone")
-        return NOT_ADMIN_TEXT
-
+    # ⭐ 2026-10-20 用户指令：**全体群成员都可触发绑定** —— 此处不再校验
+    # 发送人手机号（原 `_is_bind_admin` 名单判定已移除）。
     # 机器人实例被停用时 ⛔ 不给接入（实例停用 = 后台明确关闭该群机器人）
     instance = ctx.state.get_robot_instance(ctx.group_id)
     if instance is not None and instance["status"] == INSTANCE_DISABLED:
@@ -167,7 +166,6 @@ def handle_pending_text_if_any(ctx: HandlerContext) -> Optional[str]:
     - 文本命中命令 -> ⛔ 不当群名（明确提示，避免静默吞掉用户命令）
     - 空文本 -> 保留等待态，让用户重发
     - 超长群名 -> 保留等待态，让用户重发
-    - 等待期名单被改（不再管理员）-> 清等待态 + 越权留痕 + 拒绝
     - 等待期已被后台绑定 -> 清等待态 + 告知已绑定
     """
     row = ctx.state.get_pending_session(ctx.group_id, ctx.phone, BIZ, ctx.now)
@@ -199,14 +197,7 @@ def handle_pending_text_if_any(ctx: HandlerContext) -> Optional[str]:
     if len(text) > MAX_GROUP_NAME_LEN:
         return TOO_LONG_GROUP_NAME_TEXT
 
-    # 二次鉴权：⛔ 不靠第一轮结论（等待期内名单可能被改）
-    if not _is_bind_admin(ctx):
-        ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)
-        ctx.state.record_security_event(
-            "bind_unauthorized", ctx.group_id, ctx.phone,
-            "bind round-2 from non-admin phone")
-        return NOT_ADMIN_TEXT
-
+    # ⭐ 2026-10-20：第二轮不再二次校验发送人手机号（全员可绑定）。
     # 等待期被后台一键绑定：⛔ 不重复建，告知已绑定
     if ctx.state.get_group_config(ctx.group_id) is not None:
         ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)

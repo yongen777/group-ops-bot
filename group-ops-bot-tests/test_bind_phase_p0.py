@@ -130,25 +130,37 @@ class TestBindCommand:
         events = security_events(tmp_db, "group_bound")
         assert len(events) == 1 and events[0]["group_id"] == NEW_GROUP
 
-    def test_bind_unauthorized_rejected_and_logged(self, tmp_db):
-        """非绑定管理员 -> 拒绝 + 留痕 + ⛔ 不建群配置。"""
+    def test_bind_any_member_can_start(self, tmp_db):
+        """⭐ 2026-10-20 用户指令：**全体群成员都能触发绑定**（不校验手机号名单）。
+
+        用户实测「还没授权任何群成员为管理员，郑佳也能绑定」，确认这就是期望语义。
+        """
         backend = FakeBackend()
         reply = bind_handler.handle_command(
             commands.parse("绑定"),
             ctx_at(tmp_db, backend, phone=OTHER_PHONE))
-        assert "无权执行绑定" in reply
-        assert tmp_db.get_group_config(NEW_GROUP) is None
-        events = security_events(tmp_db, "bind_unauthorized")
-        assert len(events) == 1 and events[0]["phone"] == OTHER_PHONE
+        assert "请输入要绑定的群名称" in reply
+        assert tmp_db.get_group_config(NEW_GROUP) is None   # 第一轮不建群
+        # ⛔ 不再产生越权留痕（该分支已随名单判定一起移除）
+        assert security_events(tmp_db, "bind_unauthorized") == []
 
-    def test_bind_without_admin_list_fails_closed(self, tmp_db):
-        """未配 GOPS_BIND_ADMIN_PHONES -> 群内绑定全员不可用（fail-closed）。"""
+    def test_bind_any_member_completes_two_rounds(self, tmp_db):
+        """非名单成员走完两轮 -> 正常建群，且 bind_admins 记录**实际绑定人**。"""
+        backend = FakeBackend()
+        _, second = bind_via_chat(tmp_db, backend, phone=OTHER_PHONE,
+                                  group_name="非管理员绑的群")
+        assert "绑定成功" in second
+        row = tmp_db.get_group_config(NEW_GROUP)
+        assert row is not None and row["group_name"] == "非管理员绑的群"
+        assert json.loads(row["bind_admins"]) == [OTHER_PHONE]
+
+    def test_bind_without_admin_list_still_allowed(self, tmp_db):
+        """未配 GOPS_BIND_ADMIN_PHONES 也照常可用（该配置已不参与判定）。"""
         backend = FakeBackend()
         reply = bind_handler.handle_command(
             commands.parse("绑定"),
             ctx_at(tmp_db, backend, bind_admins=()))
-        assert "无权执行绑定" in reply
-        assert tmp_db.get_group_config(NEW_GROUP) is None
+        assert "请输入要绑定的群名称" in reply
 
     def test_rebind_is_idempotent(self, tmp_db):
         """重复绑定：明确告知已绑定，⛔ 不重置任何配置，⛔ 不进两轮。"""
@@ -249,14 +261,15 @@ class TestDiscoveredAndBackendBind:
         assert resp.status_code in (401, 403)
 
     def test_bind_command_via_callback_gets_reply(self, tmp_db):
-        """回调收到「绑定」-> 优先于群授权处理：未授权也回话（不静默）。"""
+        """回调收到「绑定」-> 优先于群授权处理：未授权也回话 + 进两轮（全员可绑）。"""
         client, sender = make_callback_app(tmp_db, bind_admins=())
         resp = client.post("/api/callback",
                            json=callback_payload("绑定", NEW_GROUP))
         assert resp.status_code == 200
         assert resp.json()["replied"] is True
-        assert "无权执行绑定" in sender.sent[-1]["text"]
-        # ⛔ 未授权绑定不建配置
+        assert "请输入要绑定的群名称" in sender.sent[-1]["text"]
+        assert "本群尚未接入机器人" not in sender.sent[-1]["text"]
+        # 第一轮不建配置（群名还没给）
         assert tmp_db.get_group_config(NEW_GROUP) is None
 
     def test_bind_command_via_callback_authorized(self, tmp_db):

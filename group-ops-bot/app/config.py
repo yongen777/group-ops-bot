@@ -57,7 +57,9 @@ class BotConfig:
     data_dir: str = "data"
     daily_cutoff: tuple = (19, 0)      # 日报/报数默认截止（Q-BIZ5 默认）
     pending_ttl_minutes: int = 30      # 两轮对话焦点 TTL（§2.2；2026-10-17 用户指令六）
-    bind_admin_phones: tuple = ()      # 群绑定管理员手机号（P0；空 = 群内「绑定」全员不可用，只能后台绑）
+    # ⚠️ 历史字段（2026-10-20 起**不再参与判定**）：用户确认群内「绑定」对
+    # 本群全体成员开放，GOPS_BIND_ADMIN_PHONES 只作部署兼容保留。
+    bind_admin_phones: tuple = ()
     mcp: McpServerConfig = field(default=None)  # type: ignore[assignment]
 
 

@@ -22,6 +22,21 @@ function fmtTime(value: string): string {
   return text.slice(0, 16);
 }
 
+/**
+ * 群显示名优先级：后台备注名 -> 群配置群名称 -> 群 ID。
+ *
+ * ⭐ 2026-10-20 修「群内录入了群名，后台却显示群 ID」：群内两轮绑定只把
+ * 群名写进 `group_config.group_name`，实例行的 `display_name`（后台备注名）
+ * 仍是空 —— 原来这里直接回退 group_id，就显示成一串数字。
+ */
+function groupNameOf(row: {
+  display_name?: string | null;
+  group_name?: string | null;
+  group_id: string;
+}): string {
+  return row.display_name || row.group_name || row.group_id;
+}
+
 export const RobotInstance: React.FC = () => {
   const { refreshGroups } = useApp();
   const [instances, setInstances] = useState<RobotInstanceRow[]>([]);
@@ -85,7 +100,7 @@ export const RobotInstance: React.FC = () => {
           : `/api/admin/robot-instances/${gid(row.group_id)}/enable`;
       await api.post(path);
       showToast(
-        `群聊【${row.display_name || row.group_id}】状态已变更为 ${
+        `群聊【${groupNameOf(row)}】状态已变更为 ${
           row.status === 'ACTIVE' ? '「已停用」' : '「已激活」'
         }`,
       );
@@ -128,7 +143,8 @@ export const RobotInstance: React.FC = () => {
 
   const openConfirmBind = (row: RobotInstanceRow) => {
     setConfirmBindTarget(row);
-    setBindName(row.display_name || '');
+    // 群内绑定已录过群名 -> 直接预填，管理员不必重打一遍
+    setBindName(row.display_name || row.group_name || '');
     setBindUrl(row.webhook_base_url || '');
   };
 
@@ -168,7 +184,7 @@ export const RobotInstance: React.FC = () => {
     setBusy(true);
     try {
       await api.del(`/api/admin/robot-instances/${gid(deleteTarget.group_id)}`);
-      showToast(`已成功移除群聊【${deleteTarget.display_name || deleteTarget.group_id}】`);
+      showToast(`已成功移除群聊【${groupNameOf(deleteTarget)}】`);
       setDeleteTarget(null);
       await load();
       await refreshGroups();
@@ -335,7 +351,7 @@ export const RobotInstance: React.FC = () => {
                       </td>
 
                       <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">
-                        {row.display_name || row.group_id}
+                        {groupNameOf(row)}
                         {isWait && (
                           <span className="ml-1.5 px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-normal">
                             新群接入
@@ -396,12 +412,18 @@ export const RobotInstance: React.FC = () => {
                             </button>
                           )}
 
-                          <button
-                            onClick={() => setEditing({ ...row })}
-                            className="px-2 py-1 text-blue-600 hover:text-blue-700 border border-blue-200 hover:bg-blue-50 rounded text-[11px] font-medium transition-colors cursor-pointer"
-                          >
-                            修改
-                          </button>
+                          {/* ⭐ 2026-10-20 用户指令：待绑定状态只留「确认绑定」一个
+                              绑定入口 —— 「修改」弹的是同一组字段（备注名 + 推送地址），
+                              两个按钮做重叠的事，容易让人以为要先后点两次。
+                              待绑定阶段要改名/填地址，直接在「确认绑定」里改即可。 */}
+                          {!isWait && (
+                            <button
+                              onClick={() => setEditing({ ...row })}
+                              className="px-2 py-1 text-blue-600 hover:text-blue-700 border border-blue-200 hover:bg-blue-50 rounded text-[11px] font-medium transition-colors cursor-pointer"
+                            >
+                              修改
+                            </button>
+                          )}
 
                           {!isWait && (
                             <button
@@ -604,7 +626,7 @@ export const RobotInstance: React.FC = () => {
               <p>
                 您即将从系统中移除群聊{' '}
                 <strong className="text-slate-900">
-                  【{deleteTarget.display_name || deleteTarget.group_id}】
+                  【{groupNameOf(deleteTarget)}】
                 </strong>
               </p>
               <p className="font-mono text-[11px] text-slate-500 break-all">

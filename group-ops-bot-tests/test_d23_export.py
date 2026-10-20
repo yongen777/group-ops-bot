@@ -262,5 +262,7 @@ class TestAdminWording:
         for name, text in texts.items():
             assert "群管理员" not in text, name
         assert "后台管理员" in base_handler.PAUSED_MEMBER_TEXT
-        assert "后台管理员" in bind_handler.UNBOUND_TEXT
+        # ⭐ 2026-10-20（D28）：绑定对全体群成员开放 —— 未绑定群引导语不再让
+        # 用户去找「后台管理员」，改成明确「本群任一成员均可操作」。
+        assert "任一成员" in bind_handler.UNBOUND_TEXT
         assert "后台管理员" in bind_handler.DISABLED_GROUP_TEXT

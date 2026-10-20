@@ -362,16 +362,44 @@ export const GroupManagement: React.FC = () => {
 
   const eligibleMembers = members.filter((m) => m.enabled && !grantPhones.has(m.user_id));
 
-  // 授权下拉的搜索过滤（姓名 / 手机号 / 岗位）
+  /**
+   * 授权候选过滤（2026-10-20 修复「搜索框输入没反应」）。
+   *
+   * 原实现是拿关键字**过滤一个原生 <select> 的 option**：0 命中时下拉只剩
+   * 一行占位项，输入框看起来完全没反应；而选中项被过滤掉时 select 还留着
+   * 旧值（看不见却已选中，点「授权」会授权给一个不在列表里的人）。
+   * 现在改成显式结果列表 + 三态空态文案（见下方 UI），并：
+   * - 姓名 / 手机号 / 岗位 都参与匹配，**忽略大小写与空格**（复制来的手机号常带空格）；
+   * - 选中项一旦不在结果里就立刻清空（下面的 useEffect）。
+   */
+  const grantKeyword = grantQuery.trim();
+  const grantDigits = grantKeyword.replace(/\s+/g, '');
   const grantOptions = (() => {
-    const query = grantQuery.trim();
-    if (!query) return eligibleMembers;
+    if (!grantKeyword) return eligibleMembers;
+    const q = grantKeyword.toLowerCase();
     return eligibleMembers.filter((m) => (
-      (m.nickname || '').includes(query)
-      || m.user_id.includes(query)
-      || (m.role || '').includes(query)
+      (m.nickname || '').toLowerCase().includes(q)
+      || (grantDigits.length > 0 && m.user_id.includes(grantDigits))
+      || (m.role || '').toLowerCase().includes(q)
+      || (ROLE_LABEL[m.role] || '').toLowerCase().includes(q)
     ));
   })();
+  const grantOptionIds = grantOptions.map((m) => m.user_id).join(',');
+  const grantSelected = members.find((m) => m.user_id === grantTarget) || null;
+
+  // ⭐ 选中项被过滤掉（或刚授权成功被移出候选）-> 立刻清空，⛔ 不留「隐形选中」
+  useEffect(() => {
+    if (!grantTarget) return;
+    if (!grantOptionIds.split(',').includes(grantTarget)) setGrantTarget('');
+  }, [grantTarget, grantOptionIds]);
+
+  // ⭐ 切群 / 切子页 -> 清搜索词与选择：否则上一个群的搜索词会把新群列表
+  //    过滤成空，看起来就是「搜索框坏了 / 列表没数据」
+  useEffect(() => {
+    setGrantQuery('');
+    setGrantTarget('');
+    setAdminQuery('');
+  }, [selectedGroupId, subView]);
 
   const grantAdmin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -1235,40 +1263,122 @@ export const GroupManagement: React.FC = () => {
             </h3>
 
             <form onSubmit={grantAdmin} className="space-y-3 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="font-semibold text-slate-700 block mb-1">搜索群成员</label>
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="输入姓名或手机号筛选"
-                      value={grantQuery}
-                      onChange={(e) => setGrantQuery(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-2 outline-none focus:border-blue-500 focus:bg-white text-xs font-medium"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="font-semibold text-slate-700 block mb-1">选择群成员</label>
-                  <select
-                    value={grantTarget}
-                    onChange={(e) => setGrantTarget(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500 focus:bg-white text-xs font-medium cursor-pointer"
-                  >
-                    <option value="">-- 请选择要授权的群成员 --</option>
-                    {grantOptions.map((m) => (
-                      <option key={m.user_id} value={m.user_id}>
-                        {m.nickname || m.user_id}（{m.role || '成员'}）
-                      </option>
-                    ))}
-                  </select>
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">搜索群成员</label>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="输入姓名 / 手机号 / 岗位筛选"
+                    value={grantQuery}
+                    onChange={(e) => setGrantQuery(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-8 py-2 outline-none focus:border-blue-500 focus:bg-white text-xs font-medium"
+                  />
+                  {grantQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setGrantQuery('')}
+                      title="清空搜索"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
 
+              {/* 候选结果列表：可点选；「没有成员 / 都授权过了 / 无匹配」三种空态分开说 */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                  <span>
+                    {grantKeyword
+                      ? `匹配到 ${grantOptions.length} 位`
+                      : `可授权成员 ${grantOptions.length} 位`}
+                  </span>
+                  {grantKeyword && (
+                    <span className="font-mono text-slate-400">「{grantKeyword}」</span>
+                  )}
+                </div>
+
+                {members.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-[11px] text-slate-500 space-y-2">
+                    <p>该群还没有应交成员，因此没有可授权的人。</p>
+                    <button
+                      type="button"
+                      onClick={() => setSubView('members')}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1"
+                    >
+                      <UserPlus className="w-3 h-3" />
+                      去「群成员」页添加
+                    </button>
+                  </div>
+                ) : eligibleMembers.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-[11px] text-slate-500">
+                    本群成员都已是群管理员或已停用，暂无可授权对象。
+                  </div>
+                ) : grantOptions.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-[11px] text-slate-500 space-y-2">
+                    <p>
+                      没有匹配「{grantKeyword}」的成员（共 {eligibleMembers.length} 位可授权）。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setGrantQuery('')}
+                      className="px-3 py-1 border border-slate-200 hover:bg-slate-50 rounded-lg text-[11px] font-medium text-slate-700 cursor-pointer"
+                    >
+                      清空搜索
+                    </button>
+                  </div>
+                ) : (
+                  <ul className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+                    {grantOptions.map((m) => {
+                      const active = m.user_id === grantTarget;
+                      return (
+                        <li key={m.user_id}>
+                          <button
+                            type="button"
+                            onClick={() => setGrantTarget(active ? '' : m.user_id)}
+                            className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                              active ? 'bg-blue-50' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold flex items-center justify-center shrink-0">
+                                {(m.nickname || m.user_id).slice(0, 1)}
+                              </span>
+                              <span className="font-semibold text-slate-800 truncate">
+                                {m.nickname || '未填写姓名'}
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-500">
+                                {m.user_id}
+                              </span>
+                            </span>
+                            <span className="flex items-center gap-1.5 shrink-0">
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 text-[10px]">
+                                {m.role || '成员'}
+                              </span>
+                              {active && <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
               <div className="flex items-center justify-between gap-3 pt-1">
-                <span className="text-[10px] text-slate-400">
-                  可授权成员 {grantOptions.length} 位
+                <span className="text-[11px] text-slate-500">
+                  {grantSelected ? (
+                    <>
+                      已选：
+                      <strong className="text-slate-800">
+                        {grantSelected.nickname || grantSelected.user_id}
+                      </strong>
+                    </>
+                  ) : (
+                    '点击上方成员即可选中'
+                  )}
                 </span>
                 <button
                   type="submit"

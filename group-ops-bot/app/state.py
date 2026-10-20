@@ -1014,20 +1014,35 @@ class StateStore:
         self._conn.commit()
 
     def get_robot_instance(self, group_id: str) -> Optional[sqlite3.Row]:
+        """实例行（⭐ 2026-10-20 起附带 ``group_name``：群配置里的群名称）。
+
+        群内两轮绑定只会把群名写进 ``group_config.group_name``，实例行的
+        ``display_name``（后台备注名）仍是 NULL —— 后台列表按 display_name
+        回退 group_id 时就会显示成一串数字（用户实测报障）。这里用 LEFT JOIN
+        带出群名，由前端按 display_name -> group_name -> group_id 兜底，
+        ⛔ 不把群名再复制一份写进实例行（否则后台改群名两边会不一致）。
+        """
         return self._conn.execute(
-            "SELECT * FROM qmx_robot_instance WHERE group_id=?",
-            (group_id,)).fetchone()
+            "SELECT i.*, g.group_name AS group_name"
+            " FROM qmx_robot_instance i"
+            " LEFT JOIN group_config g ON g.group_id = i.group_id"
+            " WHERE i.group_id=?", (group_id,)).fetchone()
 
     def list_robot_instances(
             self, status: Optional[str] = None) -> Iterable[sqlite3.Row]:
-        """后台列表（可按状态过滤；status 非法由调用方校验，此处仅透传）。"""
+        """后台列表（可按状态过滤；status 非法由调用方校验，此处仅透传）。
+
+        ⭐ 同 ``get_robot_instance``：LEFT JOIN 带出 ``group_name`` 供前端兜底。
+        """
+        base = ("SELECT i.*, g.group_name AS group_name"
+                " FROM qmx_robot_instance i"
+                " LEFT JOIN group_config g ON g.group_id = i.group_id")
         if status:
             return self._conn.execute(
-                "SELECT * FROM qmx_robot_instance WHERE status=?"
-                " ORDER BY updated_at DESC", (status,)).fetchall()
+                base + " WHERE i.status=? ORDER BY i.updated_at DESC",
+                (status,)).fetchall()
         return self._conn.execute(
-            "SELECT * FROM qmx_robot_instance"
-            " ORDER BY updated_at DESC").fetchall()
+            base + " ORDER BY i.updated_at DESC").fetchall()
 
     def bind_robot_instance(self, group_id: str, webhook_base_url: str,
                             display_name: Optional[str] = None,

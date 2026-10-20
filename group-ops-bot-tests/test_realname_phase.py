@@ -92,14 +92,20 @@ class TestUnboundGuide:
         assert "请输入要绑定的群名称" in sender.sent[-1]["text"]
         assert tmp_db.get_group_config(UNBOUND) is None  # 第一轮不建群
 
-    def test_bind_command_from_non_admin_denied(self, tmp_db):
-        """不在白名单 -> 明确无权限（⛔ 也不落成未绑定提示）。"""
+    def test_bind_command_from_any_member_allowed(self, tmp_db):
+        """⭐ 2026-10-20 用户指令：不在任何名单里的群成员也能触发绑定。
+
+        原口径是「手机号必须在 GOPS_BIND_ADMIN_PHONES」，用户实测发现
+        「群成员还没被授权成管理员，郑佳也能绑定」并确认这才是期望语义 →
+        改为全体群成员可绑定，且 ⛔ 不落成未绑定提示。
+        """
         client, sender, _ = make_client(tmp_db)
         client.post("/api/callback", json=callback_payload("绑定", UNBOUND))
         text = sender.sent[-1]["text"]
-        assert "无权执行绑定" in text
+        assert "请输入要绑定的群名称" in text
+        assert "无权执行绑定" not in text
         assert "本群尚未接入机器人" not in text
-        assert tmp_db.get_group_config(UNBOUND) is None
+        assert tmp_db.get_group_config(UNBOUND) is None   # 第一轮不建群
 
 
 class TestRealName:

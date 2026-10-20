@@ -71,7 +71,10 @@ export interface ReportField {
 
 export interface RobotInstance {
   group_id: string;
+  /** 后台备注名（管理员可改；空 = 未设置） */
   display_name: string;
+  /** ⭐ 群配置里用户绑定时录入的群名称（后端 LEFT JOIN 带出；空 = 尚未绑定） */
+  group_name?: string | null;
   webhook_base_url: string;
   webhook_key_set: boolean;
   status: 'WAIT_BIND' | 'ACTIVE' | 'DISABLED';
