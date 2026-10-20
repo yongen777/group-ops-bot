@@ -72,7 +72,14 @@ export const AdminRecordEditModal: React.FC<Props> = ({
       if (!cell?.time) return;
       draft[slot.id] = {
         time: hhmm(cell.time),
-        status: cell.status === 'backfilled' ? 'ADMIN_EDIT' : (cell.raw_status || 'NORMAL'),
+        // 选项只剩 NORMAL / ADMIN_EDIT（2026-10-20）：历史 LATE 记录在
+        // 列表里仍显示「迟到补卡」，但一进编辑框就落到「正常完成」——
+        // 否则下拉框拿不到匹配项会显示空白。⛔ 不自动写成 ADMIN_EDIT。
+        status: cell.status === 'backfilled'
+          ? 'ADMIN_EDIT'
+          : (STATUS_OPTIONS.some((opt) => opt.value === cell.raw_status)
+              ? String(cell.raw_status)
+              : 'NORMAL'),
       };
     });
     setCheckinDraft(draft);
