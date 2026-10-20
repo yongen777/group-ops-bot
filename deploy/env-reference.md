@@ -13,8 +13,6 @@
 |---|---|---|---|---|
 | `GOPS_MCP_BASE_URL` | ✅ 必需 | 无 | MCP Server 地址（SSE）。同机部署 = `http://127.0.0.1:18001` | `app/config.py:75` |
 | `GOPS_EXTERNAL_BASE_URL` | ✅ 必需 | 无 | H5 链接拼装 base，须公网可达。测试期 = `http://219.151.177.33:12334` | `app/config.py:76-81` |
-| `GOPS_ADMIN_USERNAME` | ✅ 必需* | 无 | 管理后台初始账号（*仅首次引导时需要；已有管理员后忽略） | `app/admin/auth.py:242` |
-| `GOPS_ADMIN_PASSWORD` | ✅ 必需* | 无 | 初始密码，**≥8 位**，首次登录强制改密；不可复用 | `app/admin/auth.py:243-254` |
 | `GOPS_CALLBACK_PORT` | ⬜ 可选 | `18002` | 群回调 + H5 + 上传端口（服务器上经 env 覆盖为 12334） | `app/config.py:89` |
 | `GOPS_ADMIN_PORT` | ⬜ 可选 | `18003` | 管理后台端口（⛔ 不申请公网映射） | `app/config.py:90` |
 | `GOPS_ADMIN_HOST` | ⬜ 可选 | `0.0.0.0` | 管理后台监听地址。**公网服务器必须显式 `127.0.0.1`**（经 SSH 隧道访问） | `app/config.py:91` |
@@ -27,7 +25,9 @@
 
 > 注：回调监听地址由 `BotConfig.callback_host` 固定 `0.0.0.0`（局域网紫玉直连需要，2026-10-13 确认），⛔ 不提供 env 缩小。
 
-> ⛔ **权限类配置一律不设 env**（2026-10-20 D29 用户指令）：群内「绑定」对**全体群成员**开放，原 `GOPS_BIND_ADMIN_PHONES` 已从代码与线上 env 删除；**群管理员**只能由后台「授权管理员」写入 `export_whitelist(ADMIN_ALL)`，**后台管理员**身份只存在 `admin_user` 表。`GOPS_ADMIN_USERNAME/PASSWORD` 仅用于「库里一个管理员都没有」的首次引导建号，之后一律忽略 —— 交接时在后台改账号名 + 改密码即可，⛔ 不需要动服务器变量。
+> ⛔ **权限类配置一律不设 env**（2026-10-20 D29 用户指令）：群内「绑定」对**全体群成员**开放，原 `GOPS_BIND_ADMIN_PHONES` 已从代码与线上 env 删除；**群管理员**只能由后台「授权管理员」写入 `export_whitelist(ADMIN_ALL)`，**后台管理员**身份只存在 `admin_user` 表。
+
+> ⛔ **后台账号凭据不设 env**（2026-10-20 D30 用户指令）：`GOPS_ADMIN_USERNAME` / `GOPS_ADMIN_PASSWORD` 已从代码与线上 env **彻底删除** —— 服务启动**不再建号、也不读这两个变量**（库为空时只打 WARN，业务链路照常启动）。建号唯一入口是服务器上的离线命令：`python -m app.admin.create_admin --username <名字>`（密码走 getpass，⛔ 不进 env / shell 历史）。交接时在后台「修改账号名 + 修改管理员密码」即可。
 
 ## 二、MCP Server（`python -m mcp_server.server`，:18001 SSE）
 

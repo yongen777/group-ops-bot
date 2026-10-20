@@ -24,7 +24,6 @@ import uvicorn
 
 from . import period as period_mod
 from . import recovery as recovery_handler
-from .admin import auth as admin_auth
 from .admin.server import create_admin_app
 from .backend.mcp_adapter import McpSseAdapter
 from .config import BotConfig, load_bot_config
@@ -152,12 +151,13 @@ def main() -> None:
 
     state = StateStore(state_path)
 
-    # 管理后台初始凭据引导（§4.7：无管理员时按环境变量创建，强制改密；
-    # ⛔ 不打印任何凭据；已有管理员时忽略环境变量 —— 初始凭据不可复用）
-    bootstrap = admin_auth.bootstrap_admin(state)
-    if bootstrap == "created":
-        LOG.info("admin bootstrap: initial admin created from env "
-                 "(must change password on first login)")
+    # 管理后台账号（⭐ 2026-10-20 用户指令：⛔ 不再读环境变量建号）。
+    # 库里没有管理员时**不阻断启动** —— 业务链路（:12334 回调）照常，
+    # 只打 WARN + 明确建号命令。一次误清空 admin_user 不应把整个机器人停掉。
+    if state.count_admin_users() == 0:
+        LOG.warning("admin: no admin account in %s — :18003 无法登录；"
+                    "请在服务器执行 `python -m app.admin.create_admin` 建号",
+                    state_path)
 
     app, backend, sender = _build(config, state)
 

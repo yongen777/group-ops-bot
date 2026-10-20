@@ -193,7 +193,7 @@ class TestMigrationV7ToV8:
             assert rows[0]["updated_at"] == "2026-10-16 09:00:00+08:00"
             assert conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
-            ).fetchone()["value"] == "10"   # v8/v9 之后还有 v10（report_field_seq）
+            ).fetchone()["value"] == "11"   # v8/v9/v10 之后还有 v11（实例回调地址列）
             assert store.has_whitelist_permission(GROUP, PHONE) is True
         finally:
             store.close()
@@ -321,8 +321,9 @@ class TestMigrationV3ToV4:
             # v6 -> v7（§4.11.4 D4 定夺：h5_upload 上传凭证表）、
             # v7 -> v8（2026-10-19 白名单单权化）、
             # v8 -> v9（2026-10-20 reminder_plan.source）、
-            # v9 -> v10（2026-10-20 report_field_seq 字段 id 发号器）叠加在同链上
-            assert version == "10"
+            # v9 -> v10（2026-10-20 report_field_seq 字段 id 发号器）、
+            # v10 -> v11（2026-10-20 实例表加 last_callback_url/at）叠加在同链上
+            assert version == "11"
             tables = {r["name"] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             assert "group_member_task_config" in tables
@@ -337,8 +338,9 @@ class TestMigrationV3ToV4:
             icols = {r["name"] for r in conn.execute(
                 "PRAGMA table_info(qmx_robot_instance)")}
             assert icols == {"group_id", "display_name", "webhook_base_url",
-                             "webhook_key_encrypted", "status", "created_at",
-                             "updated_at"}
+                             "webhook_key_encrypted", "status",
+                             "last_callback_url", "last_callback_at",
+                             "created_at", "updated_at"}
             n_inst = conn.execute(
                 "SELECT COUNT(*) AS n FROM qmx_robot_instance").fetchone()["n"]
             assert n_inst == 0

@@ -3,8 +3,9 @@
 
 安全底线（§4.7 关键约束，全部落地）：
 - 密码单向哈希（PBKDF2-SHA256，26 万次迭代 + 每盐随机）；⛔ 不存明文
-- 初始凭据只从环境变量引导（GOPS_ADMIN_USERNAME / GOPS_ADMIN_PASSWORD），
-  首次登录**强制改密**；改密后初始凭据不可复用（哈希已换）
+- ⛔ 不存在任何「凭据走环境变量」的路径（⭐ 2026-10-20 用户指令）：管理员
+  账号只存在 `admin_user` 表；建号只有一条路 —— 离线执行
+  `python -m app.admin.create_admin`（密码走 getpass，不进 env / 不进 shell 历史）
 - 服务端会话：令牌随机高强度，库内只存 SHA-256 哈希；
   Cookie HttpOnly + SameSite=Lax + Secure（按部署 scheme 自动/可配）
 - 登录限流：同 用户名+IP 失败 5 次锁 15 分钟（DB 持久，重启不失效）
@@ -26,7 +27,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlsplit
 
-from ..config import ConfigError
 from ..state import (LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILURES, StateStore,
                      utcnow_iso)
 
@@ -253,30 +253,33 @@ def verify_csrf(identity: AdminIdentity, request) -> bool:
     return hmac.compare_digest(provided, identity.csrf_token)
 
 
-# ---------- 初始凭据引导（fail-closed） ----------
+# ---------- 建号（⛔ 不读任何环境变量） ----------
 
-def bootstrap_admin(state: StateStore) -> str:
-    """首次启动：无任何管理员时按环境变量建初始账号（强制改密）。
+def create_admin(state: StateStore, username: str, password: str,
+                 must_change_password: bool = False) -> int:
+    """创建一个后台管理员账号（⭐ 2026-10-20 用户指令：env 引导整体移除）。
 
-    - 已有管理员 -> 忽略环境变量（⛔ 初始凭据不可复用）
-    - 缺失 / 过短 -> ConfigError（fail-closed：⛔ 不生成弱默认账号）
-    返回 "created" / "existing"。
+    ⛔ 不再有「环境变量建首号」这条路径 —— 库非空时由后台「修改账号名 /
+    修改密码」交接；库为空（新库）时用离线命令
+    ``python -m app.admin.create_admin`` 建号（密码走 getpass）。
+
+    规则与服务端改密同一口径：账号名 2~32 位、⛔ 含空白、⛔ 重名；
+    密码 ≥ ``MIN_PASSWORD_LEN``。违反 -> ValueError（调用方转 400 / CLI 退出）。
+    返回新建账号的 user_id。
     """
-    if state.count_admin_users() > 0:
-        return "existing"
-    username = os.environ.get("GOPS_ADMIN_USERNAME", "").strip()
-    password = os.environ.get("GOPS_ADMIN_PASSWORD", "")
-    if not username or not password:
-        raise ConfigError(
-            "GOPS_ADMIN_USERNAME / GOPS_ADMIN_PASSWORD required for "
-            "first-time admin bootstrap; refusing to start (fail-closed)")
-    if len(password) < MIN_PASSWORD_LEN:
-        raise ConfigError(
-            "GOPS_ADMIN_PASSWORD too short (min %d); refusing to start"
-            % MIN_PASSWORD_LEN)
-    state.create_admin_user(username, hash_password(password),
-                            must_change_password=True)
-    return "created"
+    name = (username or "").strip()
+    if not (USERNAME_MIN_LEN <= len(name) <= USERNAME_MAX_LEN):
+        raise ValueError("账号名长度需在 %d~%d 位之间"
+                         % (USERNAME_MIN_LEN, USERNAME_MAX_LEN))
+    if any(ch.isspace() for ch in name):
+        raise ValueError("账号名不能包含空格")
+    if len(password or "") < MIN_PASSWORD_LEN:
+        raise ValueError("密码长度至少 %d 位" % MIN_PASSWORD_LEN)
+    if state.get_admin_user(name) is not None:
+        raise ValueError("该账号名已存在")
+    return state.create_admin_user(name, hash_password(password),
+                                   must_change_password=must_change_password)
+
 
 
 def change_password(state: StateStore, identity: AdminIdentity,
@@ -334,6 +337,6 @@ __all__ = [
     "LOGIN_MAX_FAILURES", "LOGIN_LOCK_SECONDS",
     "hash_password", "verify_password", "login", "create_session",
     "load_session", "destroy_session", "verify_csrf", "check_origin",
-    "client_ip", "cookie_secure", "bootstrap_admin", "change_password",
+    "client_ip", "cookie_secure", "create_admin", "change_password",
     "change_username", "USERNAME_MIN_LEN", "USERNAME_MAX_LEN",
 ]

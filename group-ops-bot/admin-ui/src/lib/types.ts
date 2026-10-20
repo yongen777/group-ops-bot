@@ -34,6 +34,12 @@ export interface GroupConfig {
     summary: ReminderRule;
     report: ReminderRule;
   };
+  /**
+   * ⭐ D30 加固一：该群当前能否「主动推送」（定时提醒 / 导出文件）。
+   * 后端口径 = 实例 ACTIVE 且 webhook_base_url 非空。
+   * false 时「定时提醒 / 数据导出」开关置灰（后端 PUT 同口径拒写）。
+   */
+  push_ready?: boolean;
 }
 
 export interface GroupItem {
@@ -78,6 +84,11 @@ export interface RobotInstance {
   webhook_base_url: string;
   webhook_key_set: boolean;
   status: 'WAIT_BIND' | 'ACTIVE' | 'DISABLED';
+  /** ⭐ D30 加固一：能否主动推送（ACTIVE + 地址非空） */
+  push_ready?: boolean;
+  /** ⭐ D30 加固二：最近一次入站回调自带的回推地址（只读候选值，不是绑定） */
+  last_callback_url?: string | null;
+  last_callback_at?: string | null;
   created_at: string;
   updated_at: string;
 }

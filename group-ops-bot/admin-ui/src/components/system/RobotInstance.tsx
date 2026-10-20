@@ -37,6 +37,18 @@ function groupNameOf(row: {
   return row.display_name || row.group_name || row.group_id;
 }
 
+/**
+ * 推送地址脱敏（列表页一眼扫过时不暴露平台 key）。
+ *
+ * ⭐ D30 加固二：平台每条回调都自带该群的「回推地址」，后台把它记下来当
+ * 待绑定行的候选值。列表里只显示 `key=***` 的形态，完整地址只在
+ * 「确认绑定」弹窗内、由管理员点「填入」时才展示与使用。
+ */
+function maskCallbackUrl(url?: string | null): string {
+  if (!url) return '';
+  return url.replace(/(key=)[^&]+/i, '$1***');
+}
+
 export const RobotInstance: React.FC = () => {
   const { refreshGroups } = useApp();
   const [instances, setInstances] = useState<RobotInstanceRow[]>([]);
@@ -392,6 +404,16 @@ export const RobotInstance: React.FC = () => {
                               )}
                             </button>
                           </div>
+                        ) : row.last_callback_url ? (
+                          <div className="space-y-0.5">
+                            <span className="text-slate-400 font-normal">（暂无，待绑定配置）</span>
+                            <div
+                              className="text-[10px] text-amber-700 truncate max-w-[220px]"
+                              title="平台最近一次回调带回的地址，点「确认绑定」可一键填入"
+                            >
+                              最近回调带回：{maskCallbackUrl(row.last_callback_url)}
+                            </div>
+                          </div>
                         ) : (
                           <span className="text-slate-400 font-normal">（暂无，待绑定配置）</span>
                         )}
@@ -498,6 +520,28 @@ export const RobotInstance: React.FC = () => {
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500 focus:bg-white text-slate-800 font-medium"
                 />
               </div>
+
+              {confirmBindTarget.last_callback_url && (
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 space-y-1.5">
+                  <p className="text-[10px] font-bold text-amber-800">
+                    平台最近一次回调带回的地址（只读参考）
+                  </p>
+                  <p className="font-mono text-[10px] text-amber-900 break-all">
+                    {maskCallbackUrl(confirmBindTarget.last_callback_url)}
+                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-amber-700 leading-relaxed">
+                      来自该群真实消息，通常就是它的推送地址；仍需你确认后才会启用
+                    </span>
+                    <button
+                      onClick={() => setBindUrl(confirmBindTarget.last_callback_url || '')}
+                      className="shrink-0 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                    >
+                      填入此地址
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="font-semibold text-slate-700 block mb-1">

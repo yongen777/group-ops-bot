@@ -157,6 +157,12 @@ CREATE TABLE IF NOT EXISTS qmx_robot_instance (
     webhook_key_encrypted TEXT,                  -- 凭证密文信封（可空；平台无签名机制时恒空）
     status                TEXT NOT NULL DEFAULT 'WAIT_BIND'
                           CHECK (status IN ('WAIT_BIND','ACTIVE','DISABLED')),
+    -- ⭐ v11（2026-10-20）：最近一次**入站回调自带的回推地址**（只读观测值）。
+    -- 用途：待绑定时后台可「一键填入」——平台每条消息都带着该群的回推地址，
+    -- 不必让管理员去平台后台翻。⛔ 不等于已绑定（绑定仍要人工确认后写
+    -- webhook_base_url）；⛔ 不进日志 / 不进审计 detail（地址内含平台 key）。
+    last_callback_url     TEXT,
+    last_callback_at      TEXT,
     created_at            TEXT,
     updated_at            TEXT NOT NULL
 );
@@ -412,7 +418,7 @@ class StateStore:
         row = conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()
         version = int(row["value"]) if row else 0
-        if version >= 10:
+        if version >= 11:
             return
 
         # ---- v2 -> v3：submit_intent.token_id + recovery_task 查证计数 ----
@@ -614,6 +620,22 @@ class StateStore:
                 " VALUES(?,?)", (r["group_id"], int(r["m"])))
         conn.execute(
             "UPDATE meta SET value=? WHERE key='schema_version'", ("10",))
+        conn.commit()
+
+        # ---- v10 -> v11（2026-10-20 用户指令：webhook 加固）----
+        # 11.1 qmx_robot_instance 加 last_callback_url / last_callback_at：
+        #      存「最近一次入站回调自带的回推地址」，仅供后台待绑定行
+        #      「一键填入」参考。⛔ 不是绑定、⛔ 不参与任何出站判定
+        #      （出站仍只看 status + webhook_base_url）。
+        #      旧库补列（新库已由 _SCHEMA 建好），无需搬数据。
+        icols = {r["name"] for r in
+                 conn.execute("PRAGMA table_info(qmx_robot_instance)")}
+        for col in ("last_callback_url", "last_callback_at"):
+            if col not in icols:
+                conn.execute(
+                    "ALTER TABLE qmx_robot_instance ADD COLUMN %s TEXT" % col)
+        conn.execute(
+            "UPDATE meta SET value=? WHERE key='schema_version'", ("11",))
         conn.commit()
 
     def _new_conn(self) -> sqlite3.Connection:
@@ -1012,6 +1034,42 @@ class StateStore:
             "(group_id, status, created_at, updated_at) VALUES(?,?,?,?)",
             (group_id, "WAIT_BIND", now_iso, now_iso))
         self._conn.commit()
+
+    def record_callback_url(self, group_id: str, reply_url: str) -> bool:
+        """记账：最近一次入站回调自带的回推地址（⭐ v11，D30 加固）。
+
+        用途只有一个 —— 后台「群实例绑定」待绑定行显示 + 一键填入候选值，
+        省去管理员去平台后台翻地址。⛔ 不是绑定：不写 ``webhook_base_url``、
+        ⛔ 不改 status、⛔ 不参与任何出站判定。
+
+        地址校验走 ``normalize_webhook_url``（http/https、≤512、禁内嵌凭据）；
+        不合法 / 为空 / 实例行不存在 -> 返回 False 且**不抛异常**
+        （入站脏数据不得影响回调主流程）。
+        """
+        try:
+            url = normalize_webhook_url(reply_url)
+        except ValueError:
+            return False
+        cur = self._conn.execute(
+            "UPDATE qmx_robot_instance SET last_callback_url=?,"
+            " last_callback_at=? WHERE group_id=?",
+            (url, utcnow_iso(), group_id))
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    def robot_push_ready(self, group_id: str) -> bool:
+        """该群现在能否**主动推送**（提醒 / 导出文件）。
+
+        唯一口径：实例 ``status='ACTIVE'`` 且 ``webhook_base_url`` 非空 ——
+        与 ``platform/qmx.py`` 的出站守卫一致（那里拿不到地址就 fail-closed）。
+        ⛔ 与回复（reply_url）无关：不 ready 也能正常回话。
+        """
+        row = self._conn.execute(
+            "SELECT status, webhook_base_url FROM qmx_robot_instance"
+            " WHERE group_id=?", (group_id,)).fetchone()
+        if row is None:
+            return False
+        return row["status"] == "ACTIVE" and bool(row["webhook_base_url"])
 
     def get_robot_instance(self, group_id: str) -> Optional[sqlite3.Row]:
         """实例行（⭐ 2026-10-20 起附带 ``group_name``：群配置里的群名称）。

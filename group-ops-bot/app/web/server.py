@@ -262,6 +262,10 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
         state.note_group_seen(inbound.group_id, inbound.phone, inbound.name)
         try:
             state.ensure_robot_instance(inbound.group_id)
+            # ⭐ v11（2026-10-20 加固二）：把「最近一次回调自带的回推地址」
+            # 记到实例行，供后台待绑定行一键填入（⛔ 只是候选值，不是绑定；
+            # ⛔ 不写 webhook_base_url、⛔ 不改状态、⛔ 不打印地址本身）。
+            state.record_callback_url(inbound.group_id, inbound.reply_url)
         except Exception:
             LOG.exception("ensure_robot_instance failed")
 

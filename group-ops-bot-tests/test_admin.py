@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 
 from app.admin import auth as admin_auth
 from app.admin.server import create_admin_app
-from app.config import ConfigError
 from doubles.fakes import FakeBackend, RecordingSender
 from helpers import GROUP, PHONE, TZ, enable_all, make_config, make_ctx
 
@@ -31,10 +30,15 @@ ADMIN_PASS = "initial-pass-1"
 NEW_PASS = "formal-pass-2"
 
 
-def bootstrap(tmp_db, monkeypatch, username=ADMIN_USER, password=ADMIN_PASS):
-    monkeypatch.setenv("GOPS_ADMIN_USERNAME", username)
-    monkeypatch.setenv("GOPS_ADMIN_PASSWORD", password)
-    return admin_auth.bootstrap_admin(tmp_db)
+def bootstrap(tmp_db, monkeypatch=None, username=ADMIN_USER, password=ADMIN_PASS):
+    """测试夹具：建一个管理员账号。
+
+    ⭐ 2026-10-20（D30）：`bootstrap_admin` 与环境变量引导已整体移除，
+    建号只剩 `auth.create_admin`（生产走 `python -m app.admin.create_admin`）。
+    这里保留旧函数名只为少改调用点，签名里的 monkeypatch 已无作用。
+    """
+    return admin_auth.create_admin(tmp_db, username, password,
+                                   must_change_password=True)
 
 
 def admin_client(tmp_db, tmp_path, now_fn=None):
@@ -61,36 +65,36 @@ def mutate(client, method, path, body=None, headers=None):
     return client.request(method, path, json=body, headers=merged)
 
 
-# ---------- 初始凭据引导 ----------
+# ---------- 建号（⛔ 无 env 引导） ----------
 
-class TestBootstrap:
-    def test_missing_env_fails_closed(self, tmp_db, monkeypatch):
-        monkeypatch.delenv("GOPS_ADMIN_USERNAME", raising=False)
-        monkeypatch.delenv("GOPS_ADMIN_PASSWORD", raising=False)
-        with pytest.raises(ConfigError):
-            admin_auth.bootstrap_admin(tmp_db)
+class TestCreateAdmin:
+    def test_short_password_rejected(self, tmp_db):
+        with pytest.raises(ValueError):
+            bootstrap(tmp_db, None, password="short")
 
-    def test_short_password_fails_closed(self, tmp_db, monkeypatch):
-        with pytest.raises(ConfigError):
-            bootstrap(tmp_db, monkeypatch, password="short")
-
-    def test_creates_must_change_admin(self, tmp_db, monkeypatch):
-        result = bootstrap(tmp_db, monkeypatch)
-        assert result == "created"
+    def test_creates_must_change_admin(self, tmp_db):
+        user_id = bootstrap(tmp_db, None)
+        assert isinstance(user_id, int) and user_id > 0
         row = tmp_db.get_admin_user(ADMIN_USER)
         assert row is not None
         assert row["must_change_password"] == 1
         assert row["password_hash"].startswith("pbkdf2_sha256$")
         assert ADMIN_PASS not in row["password_hash"]  # ⛔ 不存明文
 
-    def test_existing_admin_ignores_env(self, tmp_db, monkeypatch):
-        bootstrap(tmp_db, monkeypatch)
-        # 再设一套不同环境变量：⛔ 不创建第二个账号（初始凭据不可复用）
+    def test_duplicate_username_rejected(self, tmp_db):
+        bootstrap(tmp_db, None)
+        with pytest.raises(ValueError):
+            bootstrap(tmp_db, None, password="another-pass-9")
+        assert tmp_db.count_admin_users() == 1
+
+    def test_env_credentials_have_no_effect(self, tmp_db, monkeypatch):
+        """⭐ D30：库里的账号 ⛔ 不再受任何 GOPS_ADMIN_* 变量影响。"""
         monkeypatch.setenv("GOPS_ADMIN_USERNAME", "intruder")
         monkeypatch.setenv("GOPS_ADMIN_PASSWORD", "another-pass-9")
-        assert admin_auth.bootstrap_admin(tmp_db) == "existing"
+        bootstrap(tmp_db, None)
         assert tmp_db.get_admin_user("intruder") is None
         assert tmp_db.count_admin_users() == 1
+        assert not hasattr(admin_auth, "bootstrap_admin")
 
 
 # ---------- 密码哈希 ----------

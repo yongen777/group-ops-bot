@@ -41,10 +41,10 @@ ADMIN_PASS = "initial-pass-1"
 NEW_PASS = "formal-pass-2"
 
 
-def _bootstrap(tmp_db, monkeypatch):
-    monkeypatch.setenv("GOPS_ADMIN_USERNAME", ADMIN_USER)
-    monkeypatch.setenv("GOPS_ADMIN_PASSWORD", ADMIN_PASS)
-    admin_auth.bootstrap_admin(tmp_db)
+def _bootstrap(tmp_db, monkeypatch=None):
+    """建一个必须改密的管理员（⭐ D30：env 引导已移除，直接调 create_admin）。"""
+    admin_auth.create_admin(tmp_db, ADMIN_USER, ADMIN_PASS,
+                            must_change_password=True)
 
 
 def make_client(tmp_db, tmp_path, backend=None):

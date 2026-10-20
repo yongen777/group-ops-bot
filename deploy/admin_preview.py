@@ -55,9 +55,8 @@ if SEED_DEMO:
             {"id": "pm", "name": "下午", "start": "14:00", "end": "18:00"}]})
     store.ensure_robot_instance("qmx-preview-group-001")
 
-os.environ["GOPS_ADMIN_USERNAME"] = "preview"
-os.environ["GOPS_ADMIN_PASSWORD"] = "preview-pass-1"
-admin_auth.bootstrap_admin(store)
+# ⭐ D30（2026-10-20）：env 引导已移除，预览数据直接建号（本地临时库）
+admin_auth.create_admin(store, "preview", "preview-pass-1")
 
 cfg = BotConfig(callback_port=18002, admin_port=18003,
                 external_base_url="http://127.0.0.1:18002",

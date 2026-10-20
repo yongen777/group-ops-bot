@@ -42,7 +42,7 @@ sudo bash deploy.sh          # 建用户/目录/venv/装依赖/装 systemd 单�
 sudo cp group-ops-bot.env.template /etc/group-ops/group-ops-bot.env
 sudo chown root:root /etc/group-ops/group-ops-bot.env
 sudo chmod 600 /etc/group-ops/group-ops-bot.env
-# ⚠️ 编辑 env：填 GOPS_ADMIN_USERNAME / GOPS_ADMIN_PASSWORD（首登强制改密）
+# ⚠️ 编辑 env：只需 MCP 地址与对外 base URL（后台账号不设 env，见下）
 sudo systemctl start group-ops-bot
 ```
 

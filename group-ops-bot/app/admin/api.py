@@ -40,6 +40,15 @@ _XLSX_MEDIA = ("application/vnd.openxmlformats-officedocument"
 
 LOGIN_LOCKED_TEXT = "失败次数过多，账号已锁定，请稍后再试"
 
+# ⭐ D30 加固一：依赖「机器人主动推送」的业务开关（键 -> 中文名）。
+# 未绑定推送地址（实例非 ACTIVE 或 webhook 为空）时，这两个开关 ⛔ 不许打开：
+# 打开只会「看起来正常、实际一条都发不出去」。打卡/总结/报数走被动回复，不受限。
+_PUSH_DEPENDENT_SWITCHES = {
+    "reminder": "定时提醒",
+    "statistics": "数据导出",
+}
+
+
 LOG = logging.getLogger("group-ops.admin")
 
 
@@ -353,14 +362,22 @@ def _instance_payload(row) -> dict:
     修掉「群里录入了群名、后台却显示群 ID」的问题。
     """
     key_set = bool(row["webhook_key_encrypted"])
+    status = row["status"]
+    url = row["webhook_base_url"]
     return {
         "group_id": row["group_id"],
         "display_name": row["display_name"],
         "group_name": _row_get(row, "group_name"),
-        "webhook_base_url": row["webhook_base_url"],
+        "webhook_base_url": url,
         "webhook_key_set": key_set,
         "webhook_key_masked": "****" if key_set else None,
-        "status": row["status"],
+        "status": status,
+        # ⭐ D30 加固一：唯一「能主动推送」判据（与 state.robot_push_ready 同口径）
+        "push_ready": bool(status == "ACTIVE" and url),
+        # ⭐ D30 加固二：最近一次入站回调带回的回推地址（只读候选值，
+        # ⛔ 不是绑定；由管理员点「填入」后人工确认才写 webhook_base_url）
+        "last_callback_url": _row_get(row, "last_callback_url"),
+        "last_callback_at": _row_get(row, "last_callback_at"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -584,9 +601,25 @@ def create_admin_router(*, state: StateStore, backend: Backend,
             if not isinstance(switches, dict):
                 raise HTTPException(status_code=400, detail="开关配置格式不正确，请刷新页面重试")
             current = state.normalized_switches(row)
+            base = dict(current)
             for key in StateStore.BIZ_SWITCH_KEYS:
                 if key in switches:
                     current[key] = bool(switches[key])
+            # ⭐ D30 加固一（2026-10-20 用户指令）：未绑定推送地址的群 ⛔ 不许把
+            # 「定时提醒 / 数据导出」打开 —— 这两个功能全靠群级 webhook 主动
+            # 出站，打开后开关看着正常、实际一条都发不出去（用户实测踩过：
+            # 群半启用 → 当天提醒全静默）。只拦「关 -> 开」的显式开启，
+            # ⛔ 不拦其它字段保存（否则历史遗留的开启态会让整个配置页无法保存）。
+            if not state.robot_push_ready(group_id):
+                blocked = [label for key, label in
+                           _PUSH_DEPENDENT_SWITCHES.items()
+                           if switches.get(key) is True and not base.get(key)]
+                if blocked:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="【%s】依赖机器人主动推送，该群还没有可用的推送地址："
+                               "请先到「群实例绑定」完成绑定并启用机器人，再开启该开关"
+                               % "、".join(blocked))
             fields["biz_switches"] = current
         if "period_type" in body and body["period_type"] is not None:
             if body["period_type"] not in ("daily", "weekly"):
@@ -1501,6 +1534,10 @@ def _config_payload(state: StateStore, row) -> dict:
         # 提醒规则按业务独立配置（验收项 4）：enabled/times/text
         "reminder_rules": _reminder.normalize_reminder_rules(
             row["reminder_rules"]),
+        # ⭐ D30 加固一：该群当前能否「主动推送」（定时提醒 / 导出文件）。
+        # False = 实例未绑定或已停用 -> 前端据此置灰「定时提醒 / 数据导出」
+        # 并提示先绑定（后端 PUT 同口径拒写，⛔ 不靠前端拦）。
+        "push_ready": state.robot_push_ready(row["group_id"]),
     }
 
 

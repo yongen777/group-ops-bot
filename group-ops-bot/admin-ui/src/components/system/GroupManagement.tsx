@@ -30,8 +30,9 @@ const BIZ_SWITCHES = [
   { key: 'checkin' as const, title: '考勤打卡', desc: '上下班考勤打卡与凭据记录' },
   { key: 'summary' as const, title: '今日总结', desc: '每日工作总结与要点汇报' },
   { key: 'report' as const, title: '今日报数', desc: '量化指标填报与数据采集' },
-  { key: 'reminder' as const, title: '定时提醒', desc: '到点群内催办未完成人员' },
-  { key: 'statistics' as const, title: '数据导出', desc: '管理员下载报表清单' },
+  // ⭐ D30 加固一：下面两项依赖「机器人主动推送」，需要群级 webhook 地址
+  { key: 'reminder' as const, title: '定时提醒', desc: '到点群内催办未完成人员', pushDependent: true },
+  { key: 'statistics' as const, title: '数据导出', desc: '管理员下载报表清单', pushDependent: true },
 ];
 
 /** HH:MM -> 当天分钟数（非法返回 null） */
@@ -166,6 +167,13 @@ export const GroupManagement: React.FC = () => {
     if (!config) return;
     const next = !config.switches[key];
     const label = BIZ_SWITCHES.find((item) => item.key === key)?.title || key;
+    // ⭐ D30 加固一：没钱没地址就别开灯 —— 未绑定推送地址时不许打开
+    // 「定时提醒 / 数据导出」（后端 PUT 同口径 400，这层只是即时提示）
+    const pushDependent = BIZ_SWITCHES.some((item) => item.key === key && item.pushDependent);
+    if (next && pushDependent && config.push_ready === false) {
+      showToast(`【${label}】依赖机器人主动推送，请先到「群实例绑定」填写推送地址并启用`, 'error');
+      return;
+    }
     await saveConfig({ switches: { [key]: next } }, `已${next ? '开启' : '关闭'}【${label}】功能`);
   };
 
@@ -633,19 +641,31 @@ export const GroupManagement: React.FC = () => {
               <p className="text-xs text-slate-500 mt-0.5">
                 可针对该群单独开启或关闭考勤、总结、报数与导出功能，关闭后机器人不监听对应指令
               </p>
+              {config.push_ready === false && (
+                <p className="text-[11px] text-amber-700 mt-1.5 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 leading-relaxed">
+                  ⚠ 该群尚未绑定机器人推送地址：「定时提醒」「数据导出」暂不可开启。
+                  请到左侧「群实例绑定」→ 该群「确认绑定」填写推送地址并启用。
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
               {BIZ_SWITCHES.map((item) => {
                 const enabled = config.switches[item.key];
+                // ⭐ D30 加固一：未绑定推送地址时，「定时提醒 / 数据导出」
+                // 关着的卡置灰（点了给提示），已经开着的卡打黄色告警（可关掉）
+                const pushBlocked = !!item.pushDependent && config.push_ready === false;
+                const lockedOff = pushBlocked && !enabled;
                 return (
                   <div
                     key={item.key}
                     onClick={() => toggleSwitch(item.key)}
-                    className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-2.5 ${
-                      enabled
-                        ? 'border-blue-300 bg-blue-50/30 shadow-2xs'
-                        : 'border-slate-200 bg-slate-50/40 opacity-75'
+                    className={`p-3.5 rounded-xl border transition-all flex flex-col justify-between gap-2.5 ${
+                      lockedOff
+                        ? 'border-slate-200 bg-slate-100/70 opacity-60 cursor-not-allowed'
+                        : enabled
+                          ? 'border-blue-300 bg-blue-50/30 shadow-2xs cursor-pointer'
+                          : 'border-slate-200 bg-slate-50/40 opacity-75 cursor-pointer'
                     }`}
                   >
                     <div className="flex items-center justify-between">
@@ -666,6 +686,13 @@ export const GroupManagement: React.FC = () => {
                         {enabled ? '● 功能已开启' : '○ 功能已停用'}
                       </span>
                     </div>
+                    {pushBlocked && (
+                      <p className="text-[10px] leading-relaxed text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 -mt-1">
+                        {lockedOff
+                          ? '⚠ 未绑定推送地址，暂不可开启'
+                          : '⚠ 推送地址未绑定，当前不会真的发出去'}
+                      </p>
+                    )}
                   </div>
                 );
               })}

@@ -112,14 +112,13 @@ class TestWhitelistSingleSource:
 # ---------- 3. 后台管理员身份不写死 ----------
 
 class TestAdminIdentityNotHardcoded:
-    def test_env_used_only_for_first_bootstrap(self, tmp_db, monkeypatch):
-        """首次按 env 建号；之后 env 改成任何人都不影响现有账号。"""
+    def test_env_credentials_do_not_create_admin(self, tmp_db, monkeypatch):
+        """⭐ D30：`GOPS_ADMIN_USERNAME/PASSWORD` 已彻底移除 —— 写进 env 也建不出号。"""
         monkeypatch.setenv("GOPS_ADMIN_USERNAME", "first-admin")
         monkeypatch.setenv("GOPS_ADMIN_PASSWORD", "Aa12345678")
-        assert admin_auth.bootstrap_admin(tmp_db) == "created"
-
+        assert not hasattr(admin_auth, "bootstrap_admin")
+        admin_auth.create_admin(tmp_db, "first-admin", "Aa12345678")
         monkeypatch.setenv("GOPS_ADMIN_USERNAME", "郑佳")
-        assert admin_auth.bootstrap_admin(tmp_db) == "existing"
         names = [r["username"] for r in tmp_db._conn.execute(
             "SELECT username FROM admin_user ORDER BY id")]
         assert names == ["first-admin"]
@@ -127,9 +126,7 @@ class TestAdminIdentityNotHardcoded:
 
     def test_admin_can_be_renamed_for_handover(self, tmp_db, monkeypatch):
         """交接口径：改名 + 改密即可，无需改任何代码或环境变量。"""
-        monkeypatch.setenv("GOPS_ADMIN_USERNAME", "first-admin")
-        monkeypatch.setenv("GOPS_ADMIN_PASSWORD", "Aa12345678")
-        admin_auth.bootstrap_admin(tmp_db)
+        admin_auth.create_admin(tmp_db, "first-admin", "Aa12345678")
         status, identity = admin_auth.login(
             tmp_db, "first-admin", "Aa12345678", "127.0.0.1")
         assert status == "ok"
