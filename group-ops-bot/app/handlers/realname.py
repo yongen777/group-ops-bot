@@ -38,11 +38,17 @@ CANCEL_TEXT = "取消"
 # ⭐ 2026-10-20 用户指令：示例 ⛔ 不再拿真人姓名/号码当模板，统一写「xx 手机号」
 _ASK_EXAMPLE = "（例如：xx 手机号）"
 
-ASK_TEXT = ("请发送您的「姓名 手机号」%s，"
-            "%d 分钟内有效；如需放弃请回复：取消" % (_ASK_EXAMPLE, TTL_MINUTES))
+# ⭐ 2026-10-20 用户指令：实名引导必须提醒「手机号 = 软件注册手机号」
+_PHONE_HINT = "（填报手机号一定和软件注册手机号一致）"
 
-FORMAT_ERROR_TEXT = ("输入格式有误。请重新发送「姓名 手机号」%s，或回复：取消"
-                     % _ASK_EXAMPLE)
+ASK_TEXT = ("请发送您的「姓名 手机号」%s\n"
+            "%s\n"
+            "%d 分钟内有效；如需放弃请回复：取消"
+            % (_ASK_EXAMPLE, _PHONE_HINT, TTL_MINUTES))
+
+FORMAT_ERROR_TEXT = ("输入格式有误。请重新发送「姓名 手机号」%s\n"
+                     "%s\n"
+                     "或回复：取消" % (_ASK_EXAMPLE, _PHONE_HINT))
 
 # ⭐ 2026-10-20 用户指令：已实名过的人再发「实名」-> 直接拦住（⛔ 不重复登记）
 ALREADY_REGISTERED_TEXT = ("您已完成实名登记（姓名：{name}，手机号：{masked}），"
