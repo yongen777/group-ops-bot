@@ -10,8 +10,11 @@
   "message":"成功"}``；⛔ 判成功必须读业务码（HTTP 200 也可能是业务失败）
 - push_text   主动推送 / 提醒：✅ **已实测接通**（与 reply 同形态，
   地址取群级 webhook_base_url；仅 ACTIVE 实例，⛔ 无全局兜底地址）
-- send_file   群内文件发送（统计导出用）：❌ 仍 fail-closed
-  （file 消息能力未确认，§5.2 / D12）—— 接入前如实返回未发送 + 原因
+- send_file   群内文件发送（统计导出用）：✅ **2026-10-20 实测接通**
+  —— 两步：① multipart 上传到 ``im.zdxlz.com/im-api/v1/webHook/
+  uploadAttachment?key=…&type=2`` 拿 ``content.id``；② 再向群 webhook 发
+  ``{"type":"file","fileMsg":{"fileId":<id>}}``。实测返回
+  ``{"ok":true,"code":200,"message":"成功"}``（D12 阻塞解除）
 
 ⚠️ **HTTP 200 ≠ 送达**：量子密信把业务失败（如缺字段 5005、限流 7102、
 内容为空 7101）也包在 200 里。⛔ 任何出站判定都必须解析 JSON 的
@@ -180,16 +183,135 @@ class QmxAdapter(ReplySender):
             return True, ""
         return False, "platform rejected push (see reply_probe log)"
 
-    # ---------- 3. 群内文件发送（能力未确认，fail-closed） ----------
+    # ---------- 3. 群内文件发送（2026-10-20 实测接通，D12 解除） ----------
+
+    #: 附件上传路径。⚠️ 与 send **不同主机**：send 在 ``imtwo.zdxlz.com/
+    #: im-external/v1/webhook/send``，upload 在 ``im.zdxlz.com/im-api/v1/
+    #: webHook/uploadAttachment``（2026-10-20 逐个候选实测，只有这条不 404）。
+    _UPLOAD_PATH = "/im-api/v1/webHook/uploadAttachment"
+
+    def _upload_urls(self, send_url: str) -> list:
+        """群 send 地址 -> 候选上传地址（按实测命中顺序，⛔ 不猜协议）。
+
+        1) ``imtwo`` 主机换成 ``im``（实测命中路径）
+        2) 同主机 + 上传路径（主备：平台若收敛到单主机直接生效）
+        3) 同源把 ``/send`` 换成 ``/uploadAttachment``（旧版网关兜底）
+        """
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(send_url)
+        host = parts.hostname or ""
+        port = (":%d" % parts.port) if parts.port else ""
+        query = parts.query
+        if not query:
+            query = "type=2"
+        elif "type=" not in query:
+            query = query + "&type=2"
+        urls = []
+        if "imtwo" in host:
+            urls.append(urlunsplit((parts.scheme,
+                                    host.replace("imtwo", "im", 1) + port,
+                                    self._UPLOAD_PATH, query, "")))
+        urls.append(urlunsplit((parts.scheme, parts.netloc,
+                                self._UPLOAD_PATH, query, "")))
+        urls.append(urlunsplit((parts.scheme, parts.netloc,
+                                parts.path.replace("/send",
+                                                   "/uploadAttachment"),
+                                query, "")))
+        # 去重但保序
+        seen, out = set(), []
+        for url in urls:
+            if url not in seen:
+                seen.add(url)
+                out.append(url)
+        return out
+
+    @staticmethod
+    def _file_id_of(data: dict) -> str:
+        """上传响应里取附件 ID（实测 ``content.id``；兼容 ``data.id``）。"""
+        for key in ("content", "data"):
+            node = data.get(key)
+            if isinstance(node, dict) and node.get("id"):
+                return str(node["id"])
+        if data.get("id"):
+            return str(data["id"])
+        return ""
+
+    def upload_file(self, send_url: str, path, filename: str = None):
+        """上传附件拿 fileId，返回 ``(file_id, reason)``。
+
+        ⛔ 失败一律如实返回原因（⛔ 不伪造 ID）；⛔ 不打 URL 的 query（key）。
+        """
+        import httpx
+        name = filename or Path(path).name
+        try:
+            blob = Path(path).read_bytes()
+        except OSError as exc:
+            return None, "read export file failed: %s" % exc
+        last = "upload endpoint not reachable"
+        for url in self._upload_urls(send_url):
+            try:
+                resp = httpx.post(url, files={"file": (name, blob)},
+                                  data={"type": "2"},
+                                  timeout=max(self._timeout, 30.0))
+            except httpx.HTTPError as exc:
+                last = "upload transport: %s" % exc
+                LOG.warning("upload POST failed: %s", exc)
+                continue
+            try:
+                host = httpx.URL(url).host
+            except Exception:  # pragma: no cover
+                host = "?"
+            body = str(getattr(resp, "text", "") or "")[:220]
+            LOG.info("upload_probe host=%s status=%s body=%r size=%d name=%s",
+                     host, resp.status_code, body, len(blob), name)
+            if resp.status_code >= 300:
+                last = "upload HTTP %s" % resp.status_code
+                continue
+            try:
+                data = resp.json()
+            except Exception:
+                last = "upload unreadable body"
+                continue
+            if not isinstance(data, dict):
+                last = "upload body is not a JSON object"
+                continue
+            ok = bool(data.get("ok")) or data.get("code") == 200
+            file_id = self._file_id_of(data)
+            if ok and file_id:
+                return file_id, ""
+            last = "upload rejected: code=%s msg=%s" % (
+                data.get("code"), data.get("message") or data.get("msg"))
+        return None, last
 
     def send_file(self, group_id: str, path, filename: str = None):
-        """统计导出等场景的群内文件发送（file 消息，D12）。
+        """群内文件发送（统计导出用）：上传取 fileId -> 发 file 消息。
 
-        ⚠️ 实测回填点 3：file 消息的真实形态（ multipart / URL 引用 /
-        大小上限）确认后在此实现；确认前一律如实返回未发送，
-        ⛔ 不把「已落盘」当「已送达」。
+        ✅ 2026-10-20 实测链路（线上真实群）：
+        ① ``POST https://im.zdxlz.com/im-api/v1/webHook/uploadAttachment?
+           key=…&type=2``（multipart ``file`` + form ``type=2``）
+           -> ``{"ok":true,"code":200,"content":{"id":"…",...}}``
+        ② ``POST {群 webhook}`` ``{"type":"file","fileMsg":{"fileId":"…"}}``
+           -> ``{"ok":true,"code":200,"message":"成功"}``
+
+        ⛔ 判成功只认 ② 的业务码；①成功②失败时如实返回未发送。
         """
-        return False, "file send capability unconfirmed (see D12)"
+        if self._url_resolver is None:
+            return False, "file send not wired: url_resolver not injected"
+        try:
+            url = self._url_resolver(group_id)
+        except Exception as exc:
+            return False, "file send url lookup error: %s" % exc
+        if not url or not str(url).strip():
+            return False, "group has no webhook_base_url (bind in admin first)"
+        url = str(url).strip()
+        file_id, reason = self.upload_file(url, path, filename)
+        if not file_id:
+            return False, reason
+        ok = self._post_json(url, {"type": "file",
+                                   "fileMsg": {"fileId": file_id}})
+        if ok:
+            return True, ""
+        return False, "platform rejected file message (see send probe log)"
 
     @staticmethod
     def file_name_of(path) -> str:

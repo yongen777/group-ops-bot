@@ -9,9 +9,23 @@
 - 纯读：只查 MCP 记录与本地名单，不写任何数据
 - **查询失败标记 unknown，⛔ 不当成 0**（否则「没查到」会被显示成「全员未完成」，
   管理员据此补录会重复记账）
-- 状态四态：completed（已完成）/ backfilled（后台补录）/ overdue（已过期待补录）
-  / pending（今天还没到点）
 - 达标判定只算**本群已开启的业务**（关闭的业务不算未完成）
+
+状态口径（⭐ 2026-10-20 用户指令，推翻旧「当天缺记录即待补录」）：
+
+| 状态 | 含义 | 触发条件 |
+|---|---|---|
+| completed | 正常完成 | 有记录（打卡 LATE 仍算完成，另标「迟到补卡」） |
+| backfilled | 已补录 | 有记录且 ADMIN_EDIT / entry_source=admin |
+| overdue | 逾期（待补录） | **周期已结束**仍无记录 |
+| reminded | 未完成（已提醒） | 周期未结束，且该人该业务本期**已推送过提醒**（status=sent） |
+| waiting | 未完成（时段） | 打卡：当前时刻**尚未到本时段结束**（附时段区间） |
+| pending | 未完成 | 周期未结束且没提醒过（总结/报数当天即此态） |
+
+⚠️ 关键区别（用户原话口径）：**总结 / 报数当天没有截止时刻，当天永远不会
+是「逾期」**——只有第二天回看昨天（或周报在下一周回看本周）才是逾期；
+打卡则按**时段结束时刻**判定，未到点显示「未完成（08:00-12:00）」。
+「已提醒」只认 `status='sent'`：unsent 是推送失败，群里没收到，⛔ 不算催过。
 
 导出（CSV 单表）与页面同源：都走 build_board + board_rows，⛔ 不各算一套。
 """
@@ -19,6 +33,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Optional
 
 from ..backend.base import Backend
@@ -31,7 +46,8 @@ _DEFAULT_SLOTS = [{"id": "am", "name": "上午", "start": "00:00",
                    "end": "23:59"}]
 
 STATUS_TEXT = {"completed": "正常完成", "backfilled": "已补录",
-               "overdue": "待补录", "pending": "待补录"}
+               "overdue": "逾期（待补录）", "pending": "未完成",
+               "reminded": "未完成（已提醒）", "waiting": "未完成"}
 
 _QUERIES = {"checkin": "checkin_query_records",
             "summary": "summary_query_records",
@@ -90,6 +106,74 @@ def _is_past(date_str: str, today: str) -> bool:
     return date_str < today
 
 
+def _minute_of_day(hhmm) -> Optional[int]:
+    """'HH:MM' -> 当天第几分钟；非法 / 缺失返回 None（⛔ 不猜）。"""
+    from ..period import parse_hhmm
+    try:
+        parsed = parse_hhmm(str(hhmm or ""))
+    except Exception:  # pragma: no cover - 脏配置不该炸整张表
+        parsed = None
+    if not parsed:
+        return None
+    hour, minute = parsed
+    return hour * 60 + minute
+
+
+def _slot_due(slot: dict, now_minute: Optional[int]) -> bool:
+    """该时段是否**已过结束时刻**（跨零点时段按区间判定）。
+
+    判不出来（配置非法 / 无当前时刻）一律当作「未到点」——宁可显示
+    「未完成（时段）」，也不把能补的时段误报成逾期。
+    """
+    if now_minute is None:
+        return False
+    start = _minute_of_day(slot.get("start"))
+    end = _minute_of_day(slot.get("end"))
+    if end is None:
+        return False
+    if start is not None and end < start:      # 跨零点：如 22:00-02:00
+        return end <= now_minute < start
+    return now_minute >= end
+
+
+def _window_text(slot: dict) -> str:
+    start = str(slot.get("start") or "").strip()
+    end = str(slot.get("end") or "").strip()
+    if start and end:
+        return "%s-%s" % (start[:5], end[:5])
+    return start or end
+
+
+def _period_end(date_str: str, period_type: str) -> str:
+    """周期最后一天：日报 = 当天；周报 = 该 ISO 周的周日。"""
+    if period_type != "weekly":
+        return date_str
+    try:
+        from ..period import parse_daily_key
+        day = parse_daily_key(date_str)
+    except (ValueError, TypeError):  # pragma: no cover - 路由已校验格式
+        return date_str
+    return (day + timedelta(days=6 - day.weekday())).date().isoformat()
+
+
+def _missing_status(*, biz: str, slot: Optional[dict], date_str: str,
+                    today: str, now_minute: Optional[int],
+                    reminded: bool, overdue: bool) -> str:
+    """无记录时的状态（⭐ 2026-10-20 用户口径，见模块 docstring 状态表）。
+
+    优先级：逾期 > 已提醒 > 未到点（打卡）> 未完成。
+    - overdue 由调用方按「周期是否结束」算好传入（总结按周期、打卡按时段）
+    - reminded 只对**周期未结束**生效：已经过期该催的是补录，不是再提醒
+    """
+    if overdue:
+        return "overdue"
+    if reminded:
+        return "reminded"
+    if biz == "checkin" and slot is not None and not _slot_due(slot, now_minute):
+        return "waiting"
+    return "pending"
+
+
 def _checkin_cell(rec, slot_id: str) -> Optional[dict]:
     raw_status = str(rec.get("status") or "")
     if raw_status == "ADMIN_EDIT":
@@ -105,7 +189,9 @@ def _checkin_cell(rec, slot_id: str) -> Optional[dict]:
             # D17：后台凭证缩略图（图片本体在机器人数据目录，用
             # /api/admin/uploads/{ref} 鉴权读取；⛔ 不走静态目录）
             "image_ref": str(rec.get("image_ref") or ""),
-            "image_name": str(rec.get("image_name") or "")}
+            "image_name": str(rec.get("image_name") or ""),
+            "window": "",
+            "reminded": False}
 
 
 def _summary_cell(rec) -> dict:
@@ -138,23 +224,20 @@ def _report_cell(rec) -> dict:
             "entry_source": str(rec.get("entry_source") or "")}
 
 
-def _cell_status(present: bool, date_str: str, today: str,
-                 unknown: bool) -> str:
-    if present:
-        return "completed"
-    if unknown:
-        return "overdue"  # 查不到不当 0：按「待核对」呈现，⛔ 不谎报完成
-    return "overdue" if _is_past(date_str, today) else "pending"
-
-
 def build_board(state: StateStore, backend: Backend, group_id: str,
-                date_str: str, *, today: Optional[str] = None) -> dict:
-    """构建一天 × 全员 × 三业务的看板（纯读）。"""
+                date_str: str, *, today: Optional[str] = None,
+                now=None) -> dict:
+    """构建一天 × 全员 × 三业务的看板（纯读）。
+
+    now：可注入的当前时刻（测试用；缺省取 period.now()）。
+    today：可注入的「今天」（跨零点 / 跨时区测试用）。
+    """
     row = state.get_group_config(group_id)
     if row is None:
         raise LookupError("group_not_found")
 
     from ..period import parse_daily_key, period_key as _period_key
+    from .. import period as period_mod
 
     switches = _switches(row)
     period_type = (row["period_type"] if "period_type" in row.keys()
@@ -165,7 +248,9 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
     status = (row["status"] if "status" in row.keys()
               and row["status"] else "active")
 
-    today = today or _today()
+    now = now or period_mod.now()
+    today = today or now.date().isoformat()
+    now_minute = now.hour * 60 + now.minute
     _dt = parse_daily_key(date_str)
     period_keys = {"checkin": date_str, "report": date_str,
                    "summary": _period_key(period_type, _dt)}
@@ -182,6 +267,25 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
         except Exception:  # pragma: no cover - 后端不可用属运行时情形
             records[biz] = []
             unknown[biz] = True
+
+    # ---- 已送达的提醒（「未完成（已提醒）」的唯一判据） ----
+    # ⛔ 取不到就按「没提醒过」渲染：宁可少标已提醒，也不谎报催过。
+    sent_sessions: set = set()
+    sent_phones = {"summary": set(), "report": set()}
+    try:
+        for item in state.list_sent_reminders(group_id, "checkin",
+                                              period_keys["checkin"]):
+            sent_sessions.add((str(item["phone"]),
+                               str(item["session"] or "")))
+    except Exception:  # pragma: no cover - 只读兜底
+        pass
+    for biz in ("summary", "report"):
+        try:
+            sent_phones[biz] = {str(item["phone"]) for item in
+                                state.list_sent_reminders(
+                                    group_id, biz, period_keys[biz])}
+        except Exception:  # pragma: no cover
+            sent_phones[biz] = set()
 
     # ---- 名单（含停用成员：历史记录仍要能对上号） ----
     roster = {}
@@ -215,6 +319,11 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
     for phone in sorted(extras - set(order)):
         order.append(phone)
 
+    # ---- 周期是否已结束（决定「逾期」还是「未完成」） ----
+    summary_over = today > _period_end(date_str, period_type)
+    report_over = today > _period_end(date_str, "daily")
+    day_past = _is_past(date_str, today)
+
     members = []
     checkin_done = summary_done = report_done = 0
     for phone in order:
@@ -230,20 +339,25 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
             "checkin": {},
         }
         slot_done = slot_seen = 0
-        all_overdue = False
         for slot in slots:
             rec = cells.get(slot["id"])
             if rec is None:
-                st = _cell_status(False, date_str, today,
-                                  unknown["checkin"])
+                reminded = (phone, str(slot["id"])) in sent_sessions
+                # 打卡的「逾期」= 当天且该时段已过结束时刻（或整体是过去日期）
+                st = _missing_status(
+                    biz="checkin", slot=slot, date_str=date_str, today=today,
+                    now_minute=now_minute, reminded=reminded,
+                    overdue=day_past or (date_str == today
+                                         and _slot_due(slot, now_minute)))
                 member["checkin"][slot["id"]] = {
                     "time": "", "status": st, "method": "",
-                    "raw_status": "", "image_ref": "", "image_name": ""}
+                    "raw_status": "", "image_ref": "", "image_name": "",
+                    "window": _window_text(slot), "reminded": reminded}
                 slot_seen += 1
-                if st == "overdue":
-                    all_overdue = True
             else:
                 cell = _checkin_cell(rec, slot["id"])
+                cell["window"] = _window_text(slot)
+                cell["reminded"] = (phone, str(slot["id"])) in sent_sessions
                 member["checkin"][slot["id"]] = cell
                 slot_done += 1
                 slot_seen += 1
@@ -256,8 +370,15 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
                 else "completed")
             checkin_done += 1
         else:
-            member["checkin_status"] = ("overdue" if all_overdue
-                                        else "pending")
+            states = [c["status"] for c in member["checkin"].values()]
+            if day_past or (date_str == today
+                            and all(_slot_due(s, now_minute) for s in slots)):
+                member["checkin_status"] = "overdue"
+            elif "reminded" in states:
+                member["checkin_status"] = "reminded"
+            else:
+                # 还有时段没到点 -> 整体「未完成」（不是待补录）
+                member["checkin_status"] = "pending"
 
         srec = summary_map.get(phone)
         if srec is not None:
@@ -268,8 +389,11 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
             summary_done += 1
         else:
             member["summary"] = None
-            member["summary_status"] = _cell_status(
-                False, date_str, today, unknown["summary"])
+            member["summary_status"] = _missing_status(
+                biz="summary", slot=None, date_str=date_str, today=today,
+                now_minute=now_minute,
+                reminded=phone in sent_phones["summary"],
+                overdue=summary_over)
 
         rrec = report_map.get(phone)
         if rrec is not None:
@@ -280,8 +404,11 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
             report_done += 1
         else:
             member["report"] = None
-            member["report_status"] = _cell_status(
-                False, date_str, today, unknown["report"])
+            member["report_status"] = _missing_status(
+                biz="report", slot=None, date_str=date_str, today=today,
+                now_minute=now_minute,
+                reminded=phone in sent_phones["report"],
+                overdue=report_over)
 
         members.append(member)
 
@@ -360,8 +487,11 @@ def board_rows(board: dict) -> tuple:
                 # 迟到补卡如实标注（⛔ 不把 LATE 说成正常完成）
                 label = ("迟到补卡" if cell.get("raw_status") == "LATE"
                          else STATUS_TEXT.get(status, status))
+            elif status == "waiting":
+                # 打卡未到点：把时段区间一并写出（导出表里也要能看懂）
+                label = "未完成（%s）" % (cell.get("window") or "未到时段")
             else:
-                label = STATUS_TEXT.get(status, "待补录")
+                label = STATUS_TEXT.get(status, "未完成")
             row.append(time_text or "未打卡")
             row.append(label)
 

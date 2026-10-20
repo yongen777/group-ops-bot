@@ -42,11 +42,14 @@ function todayStr(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+// 2026-10-20 口径：当天未完成 ≠ 逾期；只有周期结束才叫「待补录」
 const STATUS_TEXT: Record<CellStatus, string> = {
   completed: '正常完成',
   backfilled: '已补录',
-  overdue: '待补录',
-  pending: '待补录',
+  overdue: '逾期（待补录）',
+  pending: '未完成',
+  waiting: '未完成（未到时段）',
+  reminded: '未完成（已提醒）',
 };
 
 export const Statistics: React.FC = () => {
@@ -294,7 +297,7 @@ export const Statistics: React.FC = () => {
             >
               <option value="all">全部状态 ({totalCount})</option>
               <option value="completed">全勤达标 ({completedCount})</option>
-              <option value="need_backfill">待补录 ({pendingCount})</option>
+              <option value="need_backfill">未完成 / 待补录 ({pendingCount})</option>
             </select>
           </div>
 

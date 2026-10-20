@@ -1443,6 +1443,19 @@ class StateStore:
                 (group_id,)).fetchone()
         return int(row["n"]) if row else 0
 
+    def list_sent_reminders(self, group_id: str, biz: str,
+                            period_key: str) -> list:
+        """某群某业务某周期**已送达**的提醒（看板「已提醒」标记用；只读）。
+
+        ⛔ 只认 ``status='sent'``：unsent 是推送失败（群里其实没收到），
+        若也算「已提醒」，管理员会误以为催过而不再处理。
+        打卡按 session 区分时段；总结/报数 session 为 NULL。
+        """
+        return self._conn.execute(
+            "SELECT phone, session, sent_at FROM reminder_plan"
+            " WHERE group_id=? AND biz=? AND period_key=? AND status='sent'",
+            (group_id, biz, period_key)).fetchall()
+
     def count_admin_users(self) -> int:
         row = self._conn.execute("SELECT COUNT(*) AS n FROM admin_user").fetchone()
         return int(row["n"]) if row else 0

@@ -6,7 +6,7 @@
    能力未确认前如实返回未发送 + 原因，⛔ 不伪造成功
 2. reply_text 的真实 HTTP 路径：网络异常 / 非 2xx -> False（不当已发送）
 3. 统计导出的文件发送接缝：适配器接通 -> 话术切「已发送」；
-   未发送 / 异常 -> 保持「尚未接通」+ 本地路径（⛔ 不谎称送达）
+   未发送 / 异常 -> 如实说「发送到群聊失败」（⛔ 不谎称送达，⛔ 不贴服务器路径）
 
 ⚠️ 真实链路验证（回调可达 / 载荷形态 / H5 手机访问 / 文件送达）
 被 P2 阻塞（等紫玉公网 IP + 机器人接口）。本文件只锁「接通后行为
@@ -96,10 +96,11 @@ class TestAdapterFailClosed:
         assert ok is False
         assert "rejected" in reason
 
-    def test_send_file_unconfirmed(self):
+    def test_send_file_without_resolver(self):
+        """2026-10-20：file 通道已接通，但未注入群地址解析器仍须 fail-closed。"""
         ok, reason = QmxAdapter().send_file(GROUP, "/tmp/a.xlsx")
         assert ok is False
-        assert "unconfirmed" in reason
+        assert "not wired" in reason
 
     def test_file_name_of(self):
         assert QmxAdapter.file_name_of("/a/b/c.xlsx") == "c.xlsx"
@@ -220,7 +221,8 @@ class TestExportSendSeam:
         ctx = make_ctx(tmp_db, backend,
                        make_config(Path(str(tmp_db.db_path)).parent), now=AM)
         reply = self._export(tmp_db, backend, ctx)
-        assert "尚未接通" in reply and "本地路径" in reply
+        # 2026-10-20：失败话术不再带服务器路径（内部信息不进群聊）
+        assert "发送到群聊失败" in reply and "本地路径" not in reply
 
     def test_adapter_sent_switches_wording(self, tmp_db):
         backend = self._setup(tmp_db)
@@ -228,7 +230,7 @@ class TestExportSendSeam:
         sender.file_ok = True  # 模拟「实测接通后」
         ctx = ctx_with_sender(tmp_db, backend, sender)
         reply = self._export(tmp_db, backend, ctx)
-        assert "已发送到群" in reply
+        assert "已发送到本群" in reply and "全员可直接下载" in reply
         assert len(sender.files_sent) == 1
         assert sender.files_sent[0]["group_id"] == GROUP
 
@@ -237,7 +239,7 @@ class TestExportSendSeam:
         sender = RecordingSender()  # 默认未接通（D12）
         ctx = ctx_with_sender(tmp_db, backend, sender)
         reply = self._export(tmp_db, backend, ctx)
-        assert "尚未接通" in reply
+        assert "发送到群聊失败" in reply
         assert sender.files_sent == []
 
     def test_adapter_exception_not_counted_as_sent(self, tmp_db):
@@ -249,4 +251,97 @@ class TestExportSendSeam:
 
         ctx = ctx_with_sender(tmp_db, backend, BoomSender())
         reply = self._export(tmp_db, backend, ctx)
-        assert "尚未接通" in reply  # ⛔ 适配器异常不当已送达
+        assert "发送到群聊失败" in reply  # ⛔ 适配器异常不当已送达
+
+
+class TestFileSendChannel:
+    """2026-10-20 实测接通的 file 通道（D12 解除）。
+
+    链路：uploadAttachment（multipart, type=2）-> content.id ->
+    ``{"type":"file","fileMsg":{"fileId":…}}``。
+    这里锁「两步都做了、载荷正确、任一步失败都⛔ 不算已发送」。
+    """
+
+    URL = "https://imtwo.zdxlz.com/im-external/v1/webhook/send?key=K"
+
+    def _adapter(self):
+        return QmxAdapter(url_resolver=lambda gid: self.URL)
+
+    class _Resp:
+        def __init__(self, payload, status=200):
+            self.status_code = status
+            self._payload = payload
+            self.text = "{}"
+
+        def json(self):
+            return self._payload
+
+    def _file(self, tmp_path):
+        path = tmp_path / "export_all.xlsx"
+        path.write_bytes(b"PK\x03\x04demo")
+        return path
+
+    def test_upload_then_send(self, monkeypatch, tmp_path):
+        import httpx
+        calls = []
+
+        def fake_post(url, files=None, data=None, json=None, timeout=None):
+            calls.append({"url": url, "files": files, "data": data,
+                          "json": json})
+            if "uploadAttachment" in url:
+                return self._Resp({"ok": True, "code": 200,
+                                   "content": {"id": "FID-1"}})
+            return self._Resp({"ok": True, "code": 200, "message": "成功"})
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+        ok, reason = self._adapter().send_file(GROUP, self._file(tmp_path),
+                                               filename="export_all.xlsx")
+        assert ok is True and reason == ""
+        assert len(calls) == 2
+        # ① 上传：实测命中的 im 主机 + 正确路径 + type=2
+        assert calls[0]["url"].startswith(
+            "https://im.zdxlz.com/im-api/v1/webHook/uploadAttachment")
+        assert "type=2" in calls[0]["url"]
+        assert calls[0]["data"] == {"type": "2"}
+        assert calls[0]["files"]["file"][0] == "export_all.xlsx"
+        # ② 发 file 消息：只认业务码（这里 200/ok）
+        assert calls[1]["url"] == self.URL
+        assert calls[1]["json"] == {"type": "file",
+                                    "fileMsg": {"fileId": "FID-1"}}
+
+    def test_upload_rejected_is_not_sent(self, monkeypatch, tmp_path):
+        """上传失败 -> ⛔ 不发消息、⛔ 不返回成功。"""
+        import httpx
+        calls = []
+
+        def fake_post(url, files=None, data=None, json=None, timeout=None):
+            calls.append(url)
+            return self._Resp({"success": False, "code": 7101,
+                               "message": "文件内容不可为空"})
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+        ok, reason = self._adapter().send_file(GROUP, self._file(tmp_path))
+        assert ok is False
+        assert "upload rejected" in reason
+        assert all("uploadAttachment" in u for u in calls)  # 只试上传，没发消息
+
+    def test_send_rejected_after_upload(self, monkeypatch, tmp_path):
+        """上传成功但发消息被拒 -> 如实「未发送」。"""
+        import httpx
+
+        def fake_post(url, files=None, data=None, json=None, timeout=None):
+            if "uploadAttachment" in url:
+                return self._Resp({"ok": True, "code": 200,
+                                   "content": {"id": "FID-2"}})
+            return self._Resp({"success": False, "code": 500,
+                               "message": "系统异常"})
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+        ok, reason = self._adapter().send_file(GROUP, self._file(tmp_path))
+        assert ok is False
+        assert "rejected file message" in reason
+
+    def test_without_resolver_is_fail_closed(self, tmp_path):
+        ok, reason = QmxAdapter().send_file(GROUP, self._file(tmp_path))
+        assert ok is False
+        assert "not wired" in reason

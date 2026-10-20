@@ -77,7 +77,20 @@ export interface RobotInstance {
   updated_at: string;
 }
 
-export type CellStatus = 'completed' | 'backfilled' | 'overdue' | 'pending';
+/**
+ * 未提交状态（2026-10-20 口径）：
+ * - pending  未完成（周期未结束、也没催过；总结/报数当天即此态）
+ * - waiting  未完成（打卡时段未到点，附 window 区间）
+ * - reminded 未完成（已提醒：该人本期确实收到过提醒）
+ * - overdue  逾期（待补录：周期/时段已结束仍无记录）
+ */
+export type CellStatus =
+  | 'completed'
+  | 'backfilled'
+  | 'overdue'
+  | 'pending'
+  | 'waiting'
+  | 'reminded';
 
 export interface CheckinCell {
   time: string;
@@ -87,6 +100,10 @@ export interface CheckinCell {
   /** 凭证图片引用（后台鉴权接口 /api/admin/uploads/<ref>；空 = 无图） */
   image_ref?: string;
   image_name?: string;
+  /** 该时段区间文案（如 08:00-12:00），「未完成（时段）」展示用 */
+  window?: string;
+  /** 该时段是否已推送过提醒 */
+  reminded?: boolean;
 }
 
 export interface SummaryCell {

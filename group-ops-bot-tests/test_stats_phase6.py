@@ -36,10 +36,16 @@ def _grant_all(tmp_db, phone=PHONE):
     tmp_db.upsert_whitelist(GROUP, phone)
 
 
-def _local_path(reply):
-    match = re.search(r"本地路径 (\S+?)(?:，|$)", reply)
-    assert match, reply
-    return Path(match.group(1))
+def _export_file(tmp_db):
+    """导出落盘位置。
+
+    ⭐ 2026-10-20：失败话术不再携带服务器绝对路径（内部信息不进群聊），
+    因此测试改为直接看数据目录的 exports/（文件仍照常生成）。
+    """
+    exports = Path(str(tmp_db.db_path)).parent / "exports"
+    files = sorted(exports.glob("*.xlsx"))
+    assert files, "no export file written to %s" % exports
+    return files[-1]
 
 
 class TestExportCommandShape:
@@ -98,7 +104,7 @@ class TestExportPermission:
         _grant_all(tmp_db)
         tmp_db.upsert_group_config(GROUP, biz_switches={"checkin": False})
         backend = FakeBackend()
-        assert "尚未接通" in _run(tmp_db, backend)
+        assert "发送到群聊失败" in _run(tmp_db, backend)  # 开关不影响导出
 
 
 class TestExportPeriod:
@@ -143,7 +149,7 @@ class TestExportFailureModes:
         _grant_all(tmp_db)
         backend = FakeBackend()
         reply = _run(tmp_db, backend)
-        path = _local_path(reply)
+        path = _export_file(tmp_db)
         assert path.exists()
         assert path.name == "export_all_G100_20261013.xlsx"
 
@@ -154,7 +160,7 @@ class TestExportFailureModes:
         _grant_all(tmp_db)
         backend = FakeBackend()
         reply = _run(tmp_db, backend)
-        wb = load_workbook(BytesIO(_local_path(reply).read_bytes()))
+        wb = load_workbook(BytesIO(_export_file(tmp_db).read_bytes()))
         assert wb.sheetnames == ["打卡", "总结", "报数"]
 
 
@@ -174,7 +180,7 @@ class TestExportReportDynamicFields:
              "items": [{"field_id": 3, "field_name": "bug发现数",
                         "quantity": 7, "unit": None}]}]}
         reply = _run(tmp_db, backend)
-        wb = load_workbook(BytesIO(_local_path(reply).read_bytes()))
+        wb = load_workbook(BytesIO(_export_file(tmp_db).read_bytes()))
         header = [c.value for c in wb["报数"][1]]
         # 字段 1 没人填 -> ⛔ 不出列；两人各填不同字段 -> 两列都在
         assert header == ["手机号", "姓名", "角色", "代码行数（行）",
@@ -189,6 +195,8 @@ class TestExportFileSend:
         _grant_all(tmp_db)
         backend = FakeBackend()
         reply = _run(tmp_db, backend)
-        assert "尚未接通" in reply
-        # ⛔ 未谎称已发送
+        # 2026-10-20：真实通道已接通，但本用例的 sender 没有文件通道 ->
+        # 如实告知失败，⛔ 不谎称已发送，⛔ 不贴服务器路径
+        assert "发送到群聊失败" in reply
+        assert "本地路径" not in reply
         assert "已发送" not in reply

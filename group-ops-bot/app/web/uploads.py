@@ -39,8 +39,30 @@ _MAGIC_TABLE = (
     (b"RIFF", "image/webp", "webp"),   # RIFF....WEBP，见 _sniff_mime
 )
 
-# 上传文件保留期限（小时）：超过即清理（Q11：只清已不被任何在途流程引用的）。
-RETAIN_HOURS = 48
+# 上传文件保留期限（小时）。⭐ 2026-10-20 用户口径变更：**业务数据全部留存**
+# —— 默认 0 = 永久保留，⛔ 不再 48 小时后删除打卡凭证（否则后台看历史
+# 记录的凭证图会 404，与「数据全部保存」的预期冲突）。
+# 需要回收磁盘时显式设 ``GOPS_UPLOAD_RETAIN_HOURS``（单位小时，>0 才清理）。
+RETAIN_HOURS = 0
+
+#: 环境变量名（显式开关；0 / 非法 -> 永久保留，fail-safe 到「不删数据」）
+RETAIN_ENV = "GOPS_UPLOAD_RETAIN_HOURS"
+
+
+def resolve_retain_hours(default: Optional[int] = None) -> int:
+    """保留小时数：显式参数 > 环境变量 > 模块默认。0 = 永久保留。"""
+    if default is not None:
+        return default
+    import os
+    raw = os.environ.get(RETAIN_ENV, "").strip()
+    if not raw:
+        return RETAIN_HOURS
+    try:
+        value = int(raw)
+    except ValueError:
+        LOG.warning("invalid %s=%r -> keep uploads forever", RETAIN_ENV, raw)
+        return 0
+    return value if value > 0 else 0
 
 # 上传引用长度（服务端签发；⛔ 不用客户端提供的任何标识）。
 _REF_LEN = 22
@@ -124,13 +146,19 @@ def upload_abs_path(data_dir, rel_path: str) -> Optional[Path]:
 
 
 def cleanup_old_uploads(*, data_dir, state, now: Optional[datetime] = None,
-                        retain_hours: int = RETAIN_HOURS) -> dict:
+                        retain_hours: Optional[int] = None) -> dict:
     """清理超过保留期限的上传（best-effort；⛔ 失败只记日志不上抛）。
 
-    与 Q11 的关系：保留期限（48h）远大于令牌 30 分钟有效期与 C 类恢复
-    窗口，到点才清 —— 结果未确认的回执不会因清理丢失。
+    ⭐ 2026-10-20：默认 **不清理**（retain_hours=0 = 永久保留）。
+    业务数据全部留存是用户口径；清理只在显式配置
+    ``GOPS_UPLOAD_RETAIN_HOURS``（>0）时才执行。
     """
     from .. import period as period_mod
+    retain_hours = resolve_retain_hours(retain_hours)
+    if retain_hours <= 0:
+        # 永久保留：直接空转（⛔ 不删文件、⛔ 不删 h5_upload 行）
+        return {"deleted_rows": 0, "deleted_files": 0, "errors": 0,
+                "skipped": "retain_disabled"}
     now = now or period_mod.now()
     cutoff = (now - timedelta(hours=retain_hours)).isoformat(
         timespec="seconds")

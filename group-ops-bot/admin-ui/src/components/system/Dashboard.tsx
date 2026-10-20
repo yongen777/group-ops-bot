@@ -13,6 +13,9 @@ import {
   Eye,
   UserPlus,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Calendar,
 } from 'lucide-react';
 import { api, gid } from '../../lib/api';
 import { useApp } from '../../lib/store';
@@ -39,12 +42,12 @@ function todayStr(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-/** 凭证缩略图：加载失败（超过保留期）时退回文字，⛔ 不留破图 */
+/** 凭证缩略图：加载失败（文件缺失/不可读）时退回文字，⛔ 不留破图 */
 const ProofThumb: React.FC<{ refId: string; onOpen: () => void }> = ({ refId, onOpen }) => {
   const [failed, setFailed] = React.useState(false);
   React.useEffect(() => setFailed(false), [refId]);
   if (failed) {
-    return <span className="text-slate-400 text-[11px]">凭证已过保留期</span>;
+    return <span className="text-slate-400 text-[11px]">凭证文件不可用</span>;
   }
   return (
     <button
@@ -105,7 +108,22 @@ export const Dashboard: React.FC = () => {
   const [reminding, setReminding] = useState(false);
   const [remindMenuOpen, setRemindMenuOpen] = useState(false);
 
-  const date = todayStr();
+  // ⭐ 2026-10-20：看板日期可选（默认今天；⛔ 不允许未来日期）。
+  // 过去日期用来回看/补录，状态口径随之切换（当天「未完成」/ 过期「待补录」）。
+  const today = todayStr();
+  const [date, setDate] = useState<string>(today);
+  const isToday = date === today;
+  const dateLabel = isToday ? '今日' : date.slice(5);
+
+  const shiftDate = (days: number) => {
+    const [y, m, d] = date.split('-').map(Number);
+    const next = new Date(y, (m || 1) - 1, d || 1);
+    next.setDate(next.getDate() + days);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const value = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`;
+    if (value > today) return;   // ⛔ 未来日期没有意义
+    setDate(value);
+  };
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -187,6 +205,12 @@ export const Dashboard: React.FC = () => {
     biz?: 'checkin' | 'summary' | 'report',
   ) => {
     if (!selectedGroupId) return;
+    if (!isToday) {
+      // 提醒只对「今天」有意义：历史日期该做的是补录，⛔ 不误发催办
+      setRemindMenuOpen(false);
+      showToast('只能对今天发起提醒；历史日期请直接补录');
+      return;
+    }
     if (pendingMembers.length === 0) {
       showToast('当前群聊今日全员皆已达标，暂无需要提醒的成员');
       return;
@@ -232,6 +256,7 @@ export const Dashboard: React.FC = () => {
     member?: BoardMember,
     biz?: BizType,
     rawStatus?: string,
+    window?: string,
   ) => {
     if (status === 'completed') {
       // 迟到补卡仍算达标，但标签如实区分（⛔ 不把 LATE 说成正常完成）
@@ -259,6 +284,36 @@ export const Dashboard: React.FC = () => {
         </span>
       );
     }
+    // ⭐ 2026-10-20：打卡未到本时段结束 -> 未完成（时段区间）
+    if (status === 'waiting') {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-50 text-slate-600 border border-slate-200 text-[11px] font-medium select-none"
+          title="还没到该时段截止时刻，暂无需补录"
+        >
+          <Clock className="w-3 h-3 text-slate-400" />
+          <span>未完成{window ? `（${window}）` : ''}</span>
+        </span>
+      );
+    }
+    // 已提醒：本期确实推送过提醒（status=sent），群里收到过催办
+    if (status === 'reminded') {
+      return (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            openBackfill(member, biz);
+          }}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-300 border-dashed text-[11px] font-semibold transition-colors cursor-pointer"
+          title="已催办过，点击可直接为其补录"
+        >
+          <BellRing className="w-3 h-3 text-orange-500" />
+          <span>未完成（已提醒）</span>
+        </button>
+      );
+    }
+    // pending = 未完成（周期没结束、也没催过）；overdue = 逾期（待补录）
+    const label = status === 'overdue' ? '逾期（待补录）' : '未完成';
     return (
       <button
         onClick={(e) => {
@@ -269,7 +324,7 @@ export const Dashboard: React.FC = () => {
         title="点击直接为其补录"
       >
         <AlertTriangle className="w-3 h-3 text-amber-600" />
-        <span>{status === 'overdue' ? '逾期（待补录）' : '待补录'}</span>
+        <span>{label}</span>
       </button>
     );
   };
@@ -357,7 +412,7 @@ export const Dashboard: React.FC = () => {
         >
           <div className="flex items-start justify-between">
             <div>
-              <span className="text-xs font-medium text-slate-500">① 今日打卡业务</span>
+              <span className="text-xs font-medium text-slate-500">① {dateLabel}打卡业务</span>
               <div className="flex items-baseline gap-1 mt-1.5">
                 <span className="text-2xl font-black text-slate-900 tracking-tight">
                   {checkinDone} / {total}
@@ -369,7 +424,7 @@ export const Dashboard: React.FC = () => {
               <span className="text-[11px] text-slate-500 mt-1 block">
                 {checkinDone} 人已完成 ·{' '}
                 {total - checkinDone > 0 ? (
-                  <span className="text-amber-700 font-semibold">{total - checkinDone} 人待补录</span>
+                  <span className="text-amber-700 font-semibold">{total - checkinDone} {isToday ? '人未完成' : '人待补录'}</span>
                 ) : (
                   <span className="text-emerald-700">全员打卡完成</span>
                 )}
@@ -402,7 +457,7 @@ export const Dashboard: React.FC = () => {
         >
           <div className="flex items-start justify-between">
             <div>
-              <span className="text-xs font-medium text-slate-500">② 今日总结业务</span>
+              <span className="text-xs font-medium text-slate-500">② {dateLabel}总结业务</span>
               <div className="flex items-baseline gap-1 mt-1.5">
                 <span className="text-2xl font-black text-slate-900 tracking-tight">
                   {summaryDone} / {total}
@@ -414,7 +469,7 @@ export const Dashboard: React.FC = () => {
               <span className="text-[11px] text-slate-500 mt-1 block">
                 {summaryDone} 人已提交 ·{' '}
                 {total - summaryDone > 0 ? (
-                  <span className="text-amber-700 font-semibold">{total - summaryDone} 人待补录</span>
+                  <span className="text-amber-700 font-semibold">{total - summaryDone} {isToday ? '人未完成' : '人待补录'}</span>
                 ) : (
                   <span className="text-emerald-700">总结全员交齐</span>
                 )}
@@ -447,7 +502,7 @@ export const Dashboard: React.FC = () => {
         >
           <div className="flex items-start justify-between">
             <div>
-              <span className="text-xs font-medium text-slate-500">③ 今日报数业务</span>
+              <span className="text-xs font-medium text-slate-500">③ {dateLabel}报数业务</span>
               <div className="flex items-baseline gap-1 mt-1.5">
                 <span className="text-2xl font-black text-slate-900 tracking-tight">
                   {reportDone} / {total}
@@ -459,7 +514,7 @@ export const Dashboard: React.FC = () => {
               <span className="text-[11px] text-slate-500 mt-1 block">
                 {reportDone} 人已报数 ·{' '}
                 {total - reportDone > 0 ? (
-                  <span className="text-amber-700 font-semibold">{total - reportDone} 人待补录</span>
+                  <span className="text-amber-700 font-semibold">{total - reportDone} {isToday ? '人未完成' : '人待补录'}</span>
                 ) : (
                   <span className="text-emerald-700">报数全员交齐</span>
                 )}
@@ -492,12 +547,60 @@ export const Dashboard: React.FC = () => {
                 全员 {total} 人
               </span>
               <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-semibold">
-                {pendingMembers.length} 人待补录
+                {pendingMembers.length} {isToday ? '人未完成' : '人待补录'}
               </span>
             </div>
             <p className="text-[11px] text-slate-500 mt-0.5">
               支持综合总览，以及打卡、总结、报数三大业务全部成员详细上报数据穿透与补录。
             </p>
+          </div>
+
+          {/* ⭐ 日期选择：默认今天，可回看历史并直接补录（⛔ 不允许未来） */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5">
+              <Calendar className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-[11px] text-slate-400 font-medium">日期：</span>
+              <input
+                type="date"
+                value={date}
+                max={today}
+                onChange={(e) => setDate(e.target.value || today)}
+                className="bg-transparent font-mono font-bold text-slate-800 outline-none cursor-pointer text-xs"
+              />
+            </div>
+            <div className="flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5">
+              <button
+                onClick={() => shiftDate(-1)}
+                title="前一天"
+                className="p-1.5 rounded-lg text-slate-600 hover:bg-white hover:text-slate-900 cursor-pointer transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setDate(today)}
+                disabled={isToday}
+                title="回到今天"
+                className={`px-2 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                  isToday
+                    ? 'text-slate-400 cursor-default'
+                    : 'text-blue-700 bg-white shadow-2xs cursor-pointer'
+                }`}
+              >
+                今天
+              </button>
+              <button
+                onClick={() => shiftDate(1)}
+                disabled={isToday}
+                title={isToday ? '不能查看未来日期' : '后一天'}
+                className={`p-1.5 rounded-lg transition-colors ${
+                  isToday
+                    ? 'text-slate-300 cursor-not-allowed'
+                    : 'text-slate-600 hover:bg-white hover:text-slate-900 cursor-pointer'
+                }`}
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 rounded-xl text-xs font-medium">
@@ -526,7 +629,7 @@ export const Dashboard: React.FC = () => {
               }`}
             >
               <FileText className="w-3.5 h-3.5 text-amber-600" />
-              <span>今日总结详情</span>
+              <span>{dateLabel}总结详情</span>
             </button>
             <button
               onClick={() => setSubTab('report')}
@@ -535,7 +638,7 @@ export const Dashboard: React.FC = () => {
               }`}
             >
               <BarChart3 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>今日报数详情</span>
+              <span>{dateLabel}报数详情</span>
             </button>
           </div>
         </div>
@@ -606,8 +709,8 @@ export const Dashboard: React.FC = () => {
                   {slots.map((slot) => (
                     <th key={slot.id} className="py-2.5 px-3">{slot.name}打卡</th>
                   ))}
-                  <th className="py-2.5 px-3">今日总结</th>
-                  <th className="py-2.5 px-3">今日报数</th>
+                  <th className="py-2.5 px-3">{dateLabel}总结</th>
+                  <th className="py-2.5 px-3">{dateLabel}报数</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -627,7 +730,7 @@ export const Dashboard: React.FC = () => {
                           const cell = m.checkin[slot.id];
                           return (
                             <td key={slot.id} className="py-3 px-3 whitespace-nowrap">
-                              {renderStatusBadge(cell?.status || 'pending', m, 'checkin', cell?.raw_status)}
+                              {renderStatusBadge(cell?.status || 'pending', m, 'checkin', cell?.raw_status, cell?.window)}
                               {cell?.time && (
                                 <div className="text-[10px] text-slate-400 font-mono mt-0.5">{cell.time}</div>
                               )}
@@ -753,10 +856,10 @@ export const Dashboard: React.FC = () => {
                 </div>
                 <div>
                   <h4 className="font-bold text-slate-900 text-xs">
-                    ② 今日总结业务详细完成列表 (全部用户 {summaryDone}/{total})
+                    ② {dateLabel}总结业务详细完成列表 (全部用户 {summaryDone}/{total})
                   </h4>
                   <span className="text-[11px] text-slate-500">
-                    包含全量用户今日工作总结汇报、字数统计与合规状态
+                    包含全量用户{dateLabel}工作总结汇报、字数统计与合规状态
                   </span>
                 </div>
               </div>
@@ -831,7 +934,7 @@ export const Dashboard: React.FC = () => {
                 </div>
                 <div>
                   <h4 className="font-bold text-slate-900 text-xs">
-                    ③ 今日报数业务详细完成列表 (全部用户 {reportDone}/{total})
+                    ③ {dateLabel}报数业务详细完成列表 (全部用户 {reportDone}/{total})
                   </h4>
                   <span className="text-[11px] text-slate-500">
                     包含全量用户字段池各量化指标完成情况

@@ -14,14 +14,17 @@
   提交时快照（字段历史快照，⛔ 不随字段池后续改名而变）
 - 历史数据保留：业务开关关闭不影响导出（导的是历史账）
 
-⚠️ 阻塞项：平台 file 消息发送能力未确认（D12）。本模块完成
-「鉴权 + 查询 + 生成 XLSX + 落盘」；发送未接通时如实告知，
-⛔ 不把本地文件路径当作已送达。
+⭐ **群内投递**（2026-10-20，D12 解除）：平台 file 消息通道已实测接通
+（上传取 fileId -> ``{"type":"file","fileMsg":{"fileId":…}}``），
+本模块导出后把 xlsx 直接发到群里，**全员可见可下载**。
+⛔ 发送失败不当已送达；失败话术也⛔ 不再粘贴服务器绝对路径
+（属内部信息，路径只进日志）。
 """
 
 from __future__ import annotations
 
 import io
+import logging
 import re
 from pathlib import Path
 
@@ -31,6 +34,8 @@ from .. import commands
 from .. import period as period_mod
 from .base import HandlerContext, group_period_type
 
+LOG = logging.getLogger("group-ops.handlers.stats")
+
 BIZ = "stats"
 
 # 导出所需白名单权限（2026-10-19 用户指令：单权化，⛔ 推翻旧三权分权）
@@ -39,9 +44,10 @@ EXPORT_LABEL = {"checkin": "打卡", "summary": "总结", "report": "报数"}
 
 NOT_IN_WHITELIST_TEXT = "您没有导出权限，请联系后台管理员授予权限。"
 QUERY_FAILED_TEXT = "统计查询失败（结果未知），请稍后重试"
-FILE_SEND_BLOCKED_TEXT = ("统计表已生成，但平台文件发送能力尚未接通，"
-                          "暂无法在群内发送，请联系管理员")
-EXPORT_SENT_TEXT = "统计表已发送到群：{name}"
+# 发送失败：⛔ 不粘贴服务器路径（内部信息不该出现在群里），路径只进日志
+EXPORT_SEND_FAILED_TEXT = ("统计表已生成，但本次发送到群聊失败，请稍后重试；"
+                           "仍失败请到管理后台「统计中心」下载导出。")
+EXPORT_SENT_TEXT = "统计表已发送到本群：{name}（全员可直接下载）"
 
 
 def handle_command(parsed, ctx: HandlerContext) -> str:
@@ -74,7 +80,7 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
     with open(path, "wb") as fh:
         fh.write(workbook)
 
-    # 阶段八：文件发送走平台适配器（D12 未通时 fail-closed，如实告知）
+    # 阶段八 / 2026-10-20：文件发送走平台适配器（上传取 fileId -> file 消息）
     file_sender = getattr(ctx.sender, "send_file", None)
     if file_sender is not None:
         try:
@@ -84,10 +90,14 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
             sent, reason = False, "file send error: %s" % exc
         if sent:
             return EXPORT_SENT_TEXT.format(name=path.name)
-        return (FILE_SEND_BLOCKED_TEXT
-                + "（本地路径 %s，仅开发期可见）" % path)
+        # 原因只进日志（含服务器路径属内部信息，⛔ 不进群聊话术）
+        LOG.warning("export file send failed: group=%s name=%s path=%s "
+                    "reason=%s", ctx.group_id, path.name, path, reason)
+        return EXPORT_SEND_FAILED_TEXT
     # 无适配器注入（旧测试/裸调用）：与发送失败同口径
-    return FILE_SEND_BLOCKED_TEXT + "（本地路径 %s，仅开发期可见）" % path
+    LOG.warning("export file send skipped: no sender.send_file injected "
+                "group=%s path=%s", ctx.group_id, path)
+    return EXPORT_SEND_FAILED_TEXT
 
 
 def _period_for(biz: str, summary_ptype, now) -> str:

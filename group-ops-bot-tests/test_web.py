@@ -396,10 +396,13 @@ class TestStatsCommand:
         client = TestClient(app)
         client.post("/api/callback", json=callback_payload("导出"))
         text = sender.sent[-1]["text"]
-        assert "尚未接通" in text  # ⛔ D12 未通，如实告知
-        import os
-        match = re.search(r"本地路径 (\S+?)(?:，|$)", text)
-        assert match and os.path.exists(match.group(1))
+        # 2026-10-20：file 通道已接通，但测试 sender 不带真实通道 ->
+        # 如实告知发送失败；⛔ 不谎称已发送，⛔ 不把服务器路径贴进群聊
+        assert "发送到群聊失败" in text
+        assert "本地路径" not in text
+        from pathlib import Path
+        exports = Path(tmp_db.db_path).parent / "exports"
+        assert list(exports.glob("*.xlsx"))  # 文件确实生成（只是没送达）
 
 
 class TestH5HolderBinding:
