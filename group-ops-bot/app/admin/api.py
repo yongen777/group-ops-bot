@@ -34,6 +34,9 @@ _SLOT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
 _MAX_GROUP_ID = 64
 _MAX_NAME = 64
 _MAX_ROLE = 32
+# ⭐ 2026-10-20 用户指令：后台统计导出统一 xlsx（CSV 已下线）
+_XLSX_MEDIA = ("application/vnd.openxmlformats-officedocument"
+               ".spreadsheetml.sheet")
 
 LOGIN_LOCKED_TEXT = "失败次数过多，账号已锁定，请稍后再试"
 
@@ -1147,26 +1150,26 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                                 detail="日期格式不正确，请选择有效日期")
         return board_mod.build_board(state, backend, group_id, date_str)
 
-    # ---------- 统计导出（D3-C：CSV / XLSX 下载；纯读，查询失败不出空文件） ----------
+    # ---------- 统计导出（D3-C；⭐ 2026-10-20 起统一 XLSX；纯读，失败不出空文件） ----------
 
     @router.get("/stats/export")
     def stats_export(request: Request, group_id: str, date: str,
                      biz: Optional[str] = None, scope: str = "single",
-                     format: str = "csv", remark: Optional[str] = None):
-        """统计导出（⭐ 2026-10-19 用户指令：**只保留 CSV**）。
+                     format: str = "xlsx", remark: Optional[str] = None):
+        """统计导出（⭐ 2026-10-20 用户指令：**统一 XLSX，CSV 已下线**）。
 
-        Excel（xlsx）能力已移除：format 只接受 csv，传 xlsx 明确 400，
-        ⛔ 不静默降级成 csv 冒充用户要的格式。
-        scope=all（一天×全员×三业务单表）/ single（单业务清单）两种口径
-        都走 CSV；remark 只落审计，⛔ 不进文件内容。
+        理由：群内导出也是 xlsx（量子密信电脑端打不开 CSV），前后台口径要一致。
+        format 只接受 xlsx，传 csv 明确 400 —— ⛔ 不静默降级成别的格式冒充。
+        scope=all（一天×全员×三业务汇总单表）/ single（单业务清单）两种口径
+        都走 xlsx；remark 只落审计，⛔ 不进文件内容。
         """
         identity = _identity(request, state)
         _require_password_changed(identity)
         if scope not in ("single", "all"):
             raise HTTPException(status_code=400, detail="导出范围不正确")
-        if format != "csv":
+        if format != "xlsx":
             raise HTTPException(status_code=400,
-                                detail="目前仅支持 CSV 导出（Excel 导出能力已移除）")
+                                detail="目前仅支持 XLSX 导出（CSV 导出能力已下线）")
         row = state.get_group_config(group_id)
         if row is None:
             raise HTTPException(status_code=404, detail="群不存在")
@@ -1188,8 +1191,8 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                 raise HTTPException(status_code=503,
                                     detail="数据暂时查不到，请稍后重试")
             headers, rows = board_mod.board_rows(board)
-            content = stats_mod.rows_to_csv(headers, rows).encode("utf-8")
-            media = "text/csv; charset=utf-8"
+            content = stats_mod.multi_sheet_xlsx([("统计汇总", headers, rows)])
+            media = _XLSX_MEDIA
             filename = stats_mod.all_export_filename(group_name, date, format)
             _audit(state, request, identity, "stats.export", "group",
                    group_id, {"scope": "all", "format": format,
@@ -1217,9 +1220,8 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                                              format)
         # ⭐ 2026-10-20（P1-2）：单业务导出带上本群时段名（自定义时段不再显示成「下午」）
         slot_labels = stats_mod.slot_labels_for(state, group_id)
-        content = stats_mod.to_csv(biz, records, period_type,
-                                   slot_labels).encode("utf-8")
-        media = "text/csv; charset=utf-8"
+        content = stats_mod.to_xlsx(biz, records, period_type, slot_labels)
+        media = _XLSX_MEDIA
         _audit(state, request, identity, "stats.export", "group", group_id,
                {"scope": "single", "biz": biz, "format": format,
                 "date": date, "remark": remark})

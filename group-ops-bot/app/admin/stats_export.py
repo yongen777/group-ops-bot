@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
-"""管理后台统计与导出（D3-C）：按群多维统计 + CSV / XLSX 下载。
+"""管理后台统计与导出（D3-C）：按群多维统计 + XLSX 下载。
 
 硬约束：
 - 纯读：只查 MCP 记录与本地名单，不写任何数据
 - 列口径与机器人侧群命令导出一致（app/handlers/stats.py 同列同序），
   管理员下载与群成员收到的文件同源，便于互相校验
 - 查询失败时拒绝出文件（不出空表冒充成功）
-- CSV 带 UTF-8 BOM，保证 Excel 直接打开中文不乱码
+- ⭐ 2026-10-20 用户指令：**统一 XLSX，CSV 能力移除** —— 群内导出也是 xlsx
+  （量子密信电脑端打不开 CSV），前后台不能一套 CSV 一套 xlsx
 """
 
 from __future__ import annotations
 
-import csv
 import io
 from typing import Optional
 
 from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
 
 from ..backend.base import Backend
 from ..state import StateStore
@@ -24,6 +25,8 @@ BIZ_LABEL = {"checkin": "打卡", "summary": "总结", "report": "报数"}
 STATUS_LABEL = {"NORMAL": "按时", "LATE": "迟到", "ADMIN_EDIT": "后台补录"}
 SOURCE_LABEL = {"user": "群员", "admin": "管理员"}
 SESSION_LABEL = {"am": "上午", "pm": "下午"}
+_HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
+_HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
 
 _QUERIES = {"checkin": "checkin_query_records",
             "summary": "summary_query_records",
@@ -159,23 +162,11 @@ def records_to_rows(biz: str, records: list, period_type: str = "",
     return headers, rows
 
 
-def rows_to_csv(headers: list, rows: list) -> str:
-    """任意表头/数据行 -> CSV 文本（带 BOM）。
-
-    2026-10-19 抽出：单业务导出与「全天全部业务」单表共用同一实现，
-    ⛔ 不各写一套（否则列序与 BOM 迟早分叉）。
-    """
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(headers)
-    writer.writerows(rows)
-    return "\ufeff" + buffer.getvalue()
-
-
 def multi_sheet_xlsx(sheets: list) -> bytes:
-    """多工作表工作簿。
+    """多工作表工作簿（⛔ 已无 CSV 分支，全系统只出 xlsx）。
 
     sheets: [(工作表名, 表头, 数据行), ...]；工作表顺序即传入顺序。
+    表头统一样式（深蓝底白字 + 冻结首行），与群内导出的三张表观感一致。
     """
     workbook = Workbook()
     workbook.remove(workbook.active)  # 去掉默认空白表，避免多出一张
@@ -184,6 +175,10 @@ def multi_sheet_xlsx(sheets: list) -> bytes:
         ws.append(list(headers))
         for row in rows:
             ws.append(list(row))
+        for cell in ws[1]:
+            cell.fill = _HEADER_FILL
+            cell.font = _HEADER_FONT
+        ws.freeze_panes = "A2"
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
@@ -193,13 +188,6 @@ def safe_name(text: str, limit: int = 40) -> str:
     """文件名安全化（只替换非法字符，不改中文）。"""
     return "".join(ch if ch not in '\\/:*?"<>|' else "_"
                    for ch in (text or "群"))[:limit]
-
-
-def to_csv(biz: str, records: list, period_type: str = "",
-           slot_labels: Optional[dict] = None) -> str:
-    """CSV 文本（带 BOM）。"""
-    headers, rows = records_to_rows(biz, records, period_type, slot_labels)
-    return rows_to_csv(headers, rows)
 
 
 def to_xlsx(biz: str, records: list, period_type: str = "",

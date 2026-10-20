@@ -311,35 +311,44 @@ export const Dashboard: React.FC = () => {
       );
     }
     // 已提醒：本期确实推送过提醒（status=sent），群里收到过催办
+    // ⭐ 2026-10-20 用户指令：⛔ 未完成（含已提醒）不可点击 ——
+    // 只有「逾期（待补录）」才允许从这里发起补录
     if (status === 'reminded') {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-50 text-orange-800 border border-orange-300 border-dashed text-[11px] font-semibold select-none"
+          title="已催办过；如需补录请到「逾期（待补录）」状态再操作"
+        >
+          <BellRing className="w-3 h-3 text-orange-500" />
+          <span>未完成（已提醒）</span>
+        </span>
+      );
+    }
+    // pending = 未完成（周期没结束、也没催过）；overdue = 逾期（待补录）
+    // ⭐ 只有 overdue 可点（补录入口），pending 只是状态标签
+    if (status === 'overdue') {
       return (
         <button
           onClick={(e) => {
             e.stopPropagation();
             openBackfill(member, biz);
           }}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-300 border-dashed text-[11px] font-semibold transition-colors cursor-pointer"
-          title="已催办过，点击可直接为其补录"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 border-dashed text-[11px] font-semibold transition-colors cursor-pointer"
+          title="点击直接为其补录"
         >
-          <BellRing className="w-3 h-3 text-orange-500" />
-          <span>未完成（已提醒）</span>
+          <AlertTriangle className="w-3 h-3 text-amber-600" />
+          <span>逾期（待补录）</span>
         </button>
       );
     }
-    // pending = 未完成（周期没结束、也没催过）；overdue = 逾期（待补录）
-    const label = status === 'overdue' ? '逾期（待补录）' : '未完成';
     return (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          openBackfill(member, biz);
-        }}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 border-dashed text-[11px] font-semibold transition-colors cursor-pointer"
-        title="点击直接为其补录"
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-semibold select-none"
+        title="本期还没结束，暂不能补录"
       >
         <AlertTriangle className="w-3 h-3 text-amber-600" />
-        <span>{label}</span>
-      </button>
+        <span>未完成</span>
+      </span>
     );
   };
 

@@ -194,8 +194,9 @@ class TestExportReportDynamicFields:
         wb = load_workbook(BytesIO(_export_file(tmp_db, "report").read_bytes()))
         header = [c.value for c in wb["报数"][1]]
         # 字段 1 没人填 -> ⛔ 不出列；两人各填不同字段 -> 两列都在
+        # ⭐ 2026-10-20 用户指令：报数表移除「录入来源」列
         assert header == ["序号", "提交状态", "手机号", "姓名", "提交时间",
-                          "录入来源", "代码行数（行）", "bug发现数", "备注"]
+                          "代码行数（行）", "bug发现数", "备注"]
         assert wb["报数"].max_row == 3  # 表头 + 两人
         assert wb["报数"]["B2"].value == "已提交"
 
@@ -262,18 +263,21 @@ class TestExportThreeFiles:
 
         checkin = load_workbook(BytesIO(
             _export_file(tmp_db, "checkin").read_bytes()))["打卡"]
-        assert checkin["C2"].value == PHONE          # 手机号
-        assert checkin["E2"].value == "上午"          # 时段（本群配置名）
+        # ⭐ 打卡表：序号/手机号/姓名/上午/下午/凭证/备注（一人一行）
+        assert checkin["B2"].value == PHONE           # 手机号
+        assert checkin["C2"].value == "甲"            # 姓名
+        assert checkin["D1"].value == "上午"          # 表头 = 本群配置的时段名
+        assert checkin["D2"].value == "09:10:00"      # 该时段的打卡时刻
 
         summary = load_workbook(BytesIO(
             _export_file(tmp_db, "summary").read_bytes()))["总结"]
-        # 多行正文压成一行（⛔ 不把换行带进单元格）
-        assert summary["I2"].value == "第一行 第二行"
+        # 多行正文压成一行（⛔ 不把换行带进单元格）；⛔ 已移除「录入来源」列
+        assert summary["H2"].value == "第一行 第二行"
 
         report = load_workbook(BytesIO(
             _export_file(tmp_db, "report").read_bytes()))["报数"]
         assert [c.value for c in report[1]][-2] == "bug修复数"
-        assert report["G2"].value == 3
+        assert report["F2"].value == 3
 
     def test_partial_failure_is_reported_honestly(self, tmp_db):
         """三个文件里有一个发失败：如实报「2 成功 1 失败」，⛔ 不谎报全部成功。"""

@@ -388,13 +388,14 @@ class TestSlotLabelExport:
         from io import BytesIO
         from openpyxl import load_workbook
         ws = load_workbook(BytesIO(files[-1].read_bytes())).active
-        # 列序：序号 / 提交状态 / 手机号 / 姓名 / 时段 ...
-        labels = [row[4] for row in
-                  ws.iter_rows(min_row=2, values_only=True)]
-        assert "晚班" in labels
-        assert "上午" in labels
+        # ⭐ 2026-10-20：时段已变成**列**（一人一行），所以看表头
+        header = [c.value for c in ws[1]]
+        assert header[:5] == ["序号", "手机号", "姓名", "上午", "晚班"]
         # slot_3 ⛔ 不能再被写成「下午」
-        assert "下午" not in labels
+        assert "下午" not in header
+        # 两个时段的打卡时刻各归各列
+        assert ws["D2"].value == "09:05:00"
+        assert ws["E2"].value == "19:05:00"
 
     def test_xlsx_fallback_sheet_uses_configured_name(self, tmp_db):
         enable_all(tmp_db)
@@ -405,8 +406,8 @@ class TestSlotLabelExport:
         from openpyxl import load_workbook
         import io
         ws = load_workbook(io.BytesIO(data)).active
-        labels = [row[4] for row in ws.iter_rows(min_row=2, values_only=True)]
-        assert sorted(labels) == sorted(["上午", "晚班"])
+        header = [c.value for c in ws[1]]
+        assert header[3:5] == ["上午", "晚班"]
 
     def test_admin_export_uses_configured_name(self, tmp_db):
         enable_all(tmp_db)

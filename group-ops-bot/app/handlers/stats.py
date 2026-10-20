@@ -111,11 +111,15 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
 
     sent = 0
     failed = 0
+    # ⭐ 2026-10-20 用户指令：群若配成「免图直提」，凭证列整列不出现
+    from . import checkin as checkin_handler
+    require_image = checkin_handler.require_image(ctx)
     for biz in commands.EXPORT_ALL_BIZS:
         path = out_dir / (FILE_STEM % (biz, stamp) + ".xlsx")
         path.write_bytes(build_export_workbook(
             biz, summary_ptype, periods[biz], records[biz], slot_labels,
-            roster=roster, slots=slots, now=ctx.now))
+            roster=roster, slots=slots, now=ctx.now,
+            require_image=require_image))
         if _try_send_file(sender, ctx.group_id, path):
             sent += 1
         else:
@@ -230,6 +234,16 @@ def _fmt_time(value) -> str:
     return text.replace("T", " ").split(".")[0]
 
 
+def _fmt_clock(value) -> str:
+    """只取时刻（09:39:58）。打卡表一行一时段，日期由文件名/表内周期表达，
+    单元格里再塞一遍日期会把列撑得很宽（⭐ 2026-10-20 用户指令：合并成一行）。"""
+    text = _fmt_time(value)
+    if not text:
+        return ""
+    parts = text.split(" ")
+    return parts[1] if len(parts) > 1 else text
+
+
 def _num(value):
     """数量按**数值**写进单元格（Excel 里能直接求和/排序）。
 
@@ -252,14 +266,18 @@ _WRAP = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
 STATE_DONE = "已提交"
 STATE_MISSING = "未提交"
-STATE_NOT_STARTED = "未到时段"
+# ⭐ 2026-10-20 用户指令：状态文案要明确是「打卡」这件事
+# （下午还没到点 -> 「未到打卡时间段」，⛔ 不是含糊的「未到时段」）
+STATE_NOT_STARTED = "未到打卡时间段"
+# ⭐ 2026-10-20 用户指令：报数已提交、但某个字段没填 -> 显式写「未选择」
+REPORT_UNSELECTED = "未选择"
 _PERIOD_TYPE_LABEL = {"daily": "日报", "weekly": "周报"}
 
 
 def build_export_workbook(biz: str, period_type, period_key: str,
                           records: list, slot_labels: dict = None,
                           roster: list = None, slots: list = None,
-                          now=None) -> bytes:
+                          now=None, require_image: bool = True) -> bytes:
     """生成**单业务** XLSX（纯函数，便于测试）。
 
     ⭐ 2026-10-20 用户指令：三个业务各一个文件。
@@ -276,7 +294,8 @@ def build_export_workbook(biz: str, period_type, period_key: str,
     wb = Workbook()
     ws = wb.active
     _fill_sheet(ws, biz, period_type, records, slot_labels,
-                roster=roster, slots=slots, now=now, period_key=period_key)
+                roster=roster, slots=slots, now=now, period_key=period_key,
+                require_image=require_image)
     _decorate(ws)
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -285,26 +304,39 @@ def build_export_workbook(biz: str, period_type, period_key: str,
 
 def _fill_sheet(ws, biz: str, period_type, records: list,
                 slot_labels: dict = None, roster: list = None,
-                slots: list = None, now=None, period_key: str = "") -> None:
+                slots: list = None, now=None, period_key: str = "",
+                require_image: bool = True) -> None:
     """把一个业务写进给定 sheet（单业务与一键导出共用 ⛔ 单一真相）。"""
     if biz == "checkin":
-        _fill_checkin(ws, records, slot_labels, roster, slots, now)
+        _fill_checkin(ws, records, slot_labels, roster, slots, now,
+                      require_image)
     elif biz == "summary":
         _fill_summary(ws, records, period_type, roster, period_key, now)
     else:
         _fill_report(ws, records, roster, period_key)
 
 
-# ---------- 打卡：每人 × 每时段（未提交也在表里） ----------
+# ---------- 打卡：每人一行，每个时段一列（未提交也在表里） ----------
 
-def _fill_checkin(ws, records: list, slot_labels, roster, slots, now) -> None:
+def _fill_checkin(ws, records: list, slot_labels, roster, slots, now,
+                  require_image: bool = True) -> None:
+    """一人一行，每时段一列。
+
+    ⭐ 2026-10-20 用户指令：同一成员的多个时段**合并成同一行**
+    （旧实现是「一人 × 每时段一行」，同一个人会重复出现两行）。
+    ⛔ 不再有「提交状态 / 考核结果 / 录入来源」列 —— 打卡时间本身就是提交证据，
+    迟到 / 补录直接标在时间后面；凭证列只说有没有交（⛔ 不显示文件名）。
+    """
     ws.title = "打卡"
     labels = dict(SESSION_LABEL)
     labels.update(slot_labels or {})
     slot_list = _slot_list(slots, records, labels)
 
-    ws.append(["序号", "提交状态", "手机号", "姓名", "时段",
-               "打卡时间", "考核结果", "录入来源", "凭证图片", "备注"])
+    header = ["序号", "手机号", "姓名"] + [s["name"] for s in slot_list]
+    if require_image:
+        header.append("凭证图片")
+    header.append("备注")
+    ws.append(header)
 
     index = {}
     for rec in records:
@@ -316,50 +348,73 @@ def _fill_checkin(ws, records: list, slot_labels, roster, slots, now) -> None:
 
     rows = []
     for person in people:
-        for slot in slot_list:
-            rec = index.get((person["phone"], slot["id"]))
-            rows.append(_checkin_row(person, slot, rec, labels, now))
+        rows.append(_checkin_row(person, slot_list, index, now,
+                                 require_image, ""))
     # 有记录但不在应交名单的人：照样列出来，⛔ 不让数据在表里消失
     for rec in records:
         phone = str(rec.get("phone") or "")
         if phone in listed:
             continue
-        sid = str(rec.get("session") or "")
         rows.append(_checkin_row(
             {"phone": phone, "name": str(rec.get("name") or "")},
-            {"id": sid, "name": labels.get(sid, sid), "start": "", "end": ""},
-            rec, labels, now, note_extra="不在应交名单"))
+            slot_list, index, now, require_image, "不在应交名单"))
 
     for seq, row in enumerate(rows, start=1):
         ws.append([seq] + row)
 
 
-def _checkin_row(person, slot, rec, labels, now, note_extra="") -> list:
-    """一行打卡 = 一个人 + 一个时段（有记录 / 未提交 / 未到时段）。"""
-    label = str(slot.get("name") or labels.get(slot.get("id"),
-                                              slot.get("id") or ""))
-    if rec:
-        return [STATE_DONE, person["phone"], person.get("name") or "",
-                label, _fmt_time(rec.get("checkin_time")),
-                STATUS_LABEL.get(rec.get("status"),
-                                 rec.get("status") or ""),
-                SOURCE_LABEL.get(rec.get("entry_source"),
-                                 rec.get("entry_source") or ""),
-                rec.get("image_name") or "", note_extra]
-    state, note = _missing_state(slot, now)
-    if note_extra and not note:
-        note = note_extra
-    return [state, person["phone"], person.get("name") or "", label,
-            "", "", "", "", note]
+def _checkin_row(person, slot_list, index, now, require_image,
+                 note_extra="") -> list:
+    """一人一行：每个时段一列（打卡时间 / 未提交 / 未到打卡时间段）。"""
+    cells = []
+    notes = []
+    image_flags = []
+    any_done = False
+    for slot in slot_list:
+        rec = index.get((person["phone"], str(slot.get("id") or "")))
+        if rec:
+            any_done = True
+            image_flags.append(bool(rec.get("image_name")))
+            cells.append(_checkin_cell(rec))
+            continue
+        state, note = _missing_state(slot, now)
+        cells.append(state)
+        if note and note not in notes:
+            notes.append(note)
+    row = [person["phone"], person.get("name") or ""] + cells
+    if require_image:
+        # ⭐ 用户指令：凭证列只说「已提交 / 未提交」，⛔ 不显示图片文件名
+        complete = bool(image_flags) and all(image_flags)
+        row.append(STATE_DONE if complete else STATE_MISSING)
+        if any_done and not complete:
+            notes.append("未上传凭证")
+    if note_extra:
+        notes.insert(0, note_extra)
+    row.append("；".join(notes))
+    return row
+
+
+def _checkin_cell(rec) -> str:
+    """已提交的时段单元格：时刻 + 必要标注（迟到 / 补录）。"""
+    text = _fmt_clock(rec.get("checkin_time"))
+    marks = []
+    if str(rec.get("status") or "") == "LATE":
+        marks.append("迟到")
+    if str(rec.get("entry_source") or "") == "admin":
+        marks.append("补录")
+    return "%s（%s）" % (text, "、".join(marks)) if marks else text
 
 
 def _missing_state(slot, now) -> tuple:
-    """未提交时区分「未到时段 / 时段进行中 / 时段已结束」。"""
+    """未提交时区分「未到打卡时间段 / 时段进行中 / 时段已结束」。
+
+    状态本身已经把「还没到点」说清楚了，备注列 ⛔ 不再重复写「时段未开始」。
+    """
     start = str(slot.get("start") or "")
     end = str(slot.get("end") or "")
     hhmm = now.strftime("%H:%M") if now is not None else ""
     if hhmm and start and hhmm < start:
-        return STATE_NOT_STARTED, "时段未开始"
+        return STATE_NOT_STARTED, ""
     if hhmm and end and hhmm > end:
         return STATE_MISSING, "时段已结束"
     return STATE_MISSING, ""
@@ -391,7 +446,7 @@ def _fill_summary(ws, records: list, period_type, roster, period_key,
                   now) -> None:
     ws.title = "总结"
     ws.append(["序号", "提交状态", "手机号", "姓名", "周期类型", "周期",
-               "提交时间", "录入来源", "内容", "备注"])
+               "提交时间", "内容", "备注"])
 
     by_phone = {}
     for rec in records:
@@ -422,14 +477,13 @@ def _summary_row(person, rec, period_type, period_key, now,
     ptype_label = _PERIOD_TYPE_LABEL.get(str(ptype), str(ptype))
     period = (rec or {}).get("period_key") or period_key or ""
     if rec:
+        # ⭐ 2026-10-20 用户指令：总结表移除「录入来源」列
         return [STATE_DONE, person["phone"], person.get("name") or "",
                 ptype_label, period,
                 _fmt_time(rec.get("updated_time")),
-                SOURCE_LABEL.get(rec.get("entry_source"),
-                                 rec.get("entry_source") or ""),
                 _one_line(rec.get("content")), note_extra]
     return [STATE_MISSING, person["phone"], person.get("name") or "",
-            ptype_label, period, "", "", "", note_extra]
+            ptype_label, period, "", "", note_extra]
 
 
 def _fill_report(ws, records: list, roster, period_key) -> None:
@@ -446,7 +500,7 @@ def _fill_report(ws, records: list, roster, period_key) -> None:
             unit = item.get("unit")
             columns.append((fid, "%s（%s）" % (name, unit) if unit else name))
     columns.sort(key=lambda c: (c[0] is None, c[0]))
-    ws.append(["序号", "提交状态", "手机号", "姓名", "提交时间", "录入来源"]
+    ws.append(["序号", "提交状态", "手机号", "姓名", "提交时间"]
               + [header for _, header in columns] + ["备注"])
 
     by_phone = {}
@@ -473,11 +527,11 @@ def _fill_report(ws, records: list, roster, period_key) -> None:
 
 def _report_row(person, rec, columns, note_extra="") -> list:
     if not rec:
-        # ⚠️ 列数必须与「已提交」分支严格一致（state/phone/name/时间/来源
-        #   = 5 列）—— 多一个空串就会让未提交行比表头多一列，
+        # ⚠️ 列数必须与「已提交」分支严格一致（state/phone/name/时间 = 4 列）
+        #   —— 多一个空串就会让未提交行比表头多一列，
         #   Excel 里表现为右端冒出一个空列（2026-10-20 线上实测踩到）
         return [STATE_MISSING, person["phone"], person.get("name") or "",
-                "", ""] + ["" for _ in columns] + [note_extra]
+                ""] + ["" for _ in columns] + [note_extra]
     values = {}
     for item in rec.get("items") or []:
         # 同字段多次出现取最后一条（防御性；一周期一次提交下不会发生）
@@ -486,12 +540,21 @@ def _report_row(person, rec, columns, note_extra="") -> list:
     role = str(rec.get("role") or "")
     if role:  # D7 起角色绑定已取消；旧数据如实标注，⛔ 不丢信息
         notes.append("角色：%s" % role)
+    # ⭐ 2026-10-20 用户指令：报数表移除「录入来源」列
     return [STATE_DONE, person["phone"], person.get("name") or "",
-            _fmt_time(rec.get("created_time")),
-            SOURCE_LABEL.get(rec.get("entry_source"),
-                             rec.get("entry_source") or "")] + \
-           [_num(values.get(fid)) for fid, _ in columns] + \
+            _fmt_time(rec.get("created_time"))] + \
+           [_report_value(values, fid) for fid, _ in columns] + \
            ["；".join(notes)]
+
+
+def _report_value(values: dict, fid):
+    """单字段取值：已提交但这一格没填 -> 「未选择」（⛔ 不留空白让人猜）。"""
+    if fid not in values:
+        return REPORT_UNSELECTED
+    value = values[fid]
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return REPORT_UNSELECTED
+    return _num(value)
 
 
 # ---------- 公共小工具 ----------
@@ -535,10 +598,12 @@ def _decorate(ws) -> None:
             for cell in ws[get_column_letter(idx)][1:]:
                 cell.alignment = _WRAP
 
+    # ⭐ 2026-10-20 用户指令：⛔ 不再整行铺粉 —— 一个人没交就整行变粉，
+    # 多人未交时表格看着像坏了（用户实测：首行正常、后面全是粉底）。
+    # 只给「未提交 / 未到打卡时间段」这些**状态单元格**上浅底，其余保持白底。
     for row in ws.iter_rows(min_row=2):
-        if len(row) > 1 and row[1].value in (STATE_MISSING,
-                                             STATE_NOT_STARTED):
-            for cell in row:
+        for cell in row:
+            if cell.value in (STATE_MISSING, STATE_NOT_STARTED):
                 cell.fill = _PENDING_FILL
 
 

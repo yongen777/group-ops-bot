@@ -146,7 +146,7 @@ export const Statistics: React.FC = () => {
   };
 
   /** 导出：走服务端生成文件（不受当前页面筛选影响，按该群当日全量记录生成）
-   *  2026-10-19 用户指令：只保留 CSV，Excel 能力已移除 */
+   *  2026-10-20 用户指令：统一 XLSX（CSV 在量子密信电脑端打不开，前后台同口径） */
   const executeExport = async () => {
     if (!exportModal || !board) return;
     setExporting(true);
@@ -156,7 +156,7 @@ export const Statistics: React.FC = () => {
         date,
         biz: exportModal.biz,
         scope: exportModal.scope,
-        format: 'csv',
+        format: 'xlsx',
         remark: exportRemark.trim(),
       })}`;
       const link = document.createElement('a');
@@ -166,7 +166,7 @@ export const Statistics: React.FC = () => {
       link.click();
       document.body.removeChild(link);
       setExportModal(null);
-      showToast(`已生成【${exportModal.title}】CSV 表格，请查看下载文件`);
+      showToast(`已生成【${exportModal.title}】Excel 表格，请查看下载文件`);
     } catch (err) {
       showToast(err instanceof Error ? plainError(err.message) : '导出未成功，请稍后重试');
     } finally {
@@ -308,7 +308,7 @@ export const Statistics: React.FC = () => {
               className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 disabled:opacity-50 text-white font-bold rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer text-xs"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>一键导出全部业务清单 (.CSV)</span>
+              <span>一键导出全部业务清单 (.XLSX)</span>
             </button>
 
             <div className="flex items-center p-0.5 bg-slate-100 rounded-xl text-xs font-semibold">
@@ -534,7 +534,6 @@ export const Statistics: React.FC = () => {
             </span>
             <span className="text-emerald-700 font-bold">已就绪合规导出</span>
           </div>
-          <span className="text-slate-400">导出统一为 CSV（Excel 导出已下线）</span>
         </div>
       </div>
 
@@ -588,7 +587,7 @@ export const Statistics: React.FC = () => {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-500">文件格式：</span>
-                <span className="font-mono font-bold text-slate-900">CSV 表格</span>
+                <span className="font-mono font-bold text-slate-900">Excel 表格（.xlsx）</span>
               </div>
             </div>
 

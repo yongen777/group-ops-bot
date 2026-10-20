@@ -445,41 +445,46 @@ class TestStatsExport:
              "status": "NORMAL", "entry_source": "user",
              "image_name": "a.jpg"}]}
 
-    def test_export_csv(self, tmp_db, tmp_path, monkeypatch):
-        backend = FakeBackend()
-        backend.results["checkin_query_records"] = self._records()
-        client = self._client(tmp_db, tmp_path, monkeypatch, backend)
-        r = client.get("/api/admin/stats/export",
-                       params={"group_id": GROUP, "biz": "checkin",
-                               "date": "2026-10-15", "format": "csv"})
-        assert r.status_code == 200
-        assert "text/csv" in r.headers["content-type"]
-        body = r.content.decode("utf-8")
-        # UTF-8 BOM：Excel 直接打开中文不乱码
-        assert body.startswith("\ufeff")
-        # 列口径与机器人侧导出一致（中文表头 + 映射值）
-        assert "手机号" in body and "姓名" in body and "打卡时间" in body
-        assert PHONE in body and "张三" in body
-        assert "上午" in body and "按时" in body and "群员" in body
-        # 中文文件名 + RFC 5987
-        cd = r.headers["content-disposition"]
-        assert "attachment" in cd
-        assert "filename*=UTF-8''" in cd
-        assert ".csv" in cd
-
-    def test_export_xlsx_removed(self, tmp_db, tmp_path, monkeypatch):
-        """⭐ 2026-10-19 用户指令：Excel 导出能力已移除，只保留 CSV。
-
-        ⛔ 不静默降级成 CSV 冒充：明确 400 + 说明。
-        """
+    def test_export_xlsx(self, tmp_db, tmp_path, monkeypatch):
+        """⭐ 2026-10-20 用户指令：后台统计导出统一 xlsx（CSV 已下线）。"""
+        from io import BytesIO
+        from openpyxl import load_workbook
         backend = FakeBackend()
         backend.results["checkin_query_records"] = self._records()
         client = self._client(tmp_db, tmp_path, monkeypatch, backend)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "biz": "checkin",
                                "date": "2026-10-15", "format": "xlsx"})
+        assert r.status_code == 200
+        assert "spreadsheetml.sheet" in r.headers["content-type"]
+        ws = load_workbook(BytesIO(r.content)).active
+        header = [c.value for c in ws[1]]
+        # 列口径与机器人侧导出一致（中文表头 + 映射值）
+        assert "手机号" in header and "姓名" in header and "打卡时间" in header
+        flat = "".join(str(c.value) for row in ws.iter_rows(min_row=2)
+                       for c in row if c.value is not None)
+        assert PHONE in flat and "张三" in flat
+        assert "上午" in flat and "按时" in flat and "群员" in flat
+        # 中文文件名 + RFC 5987
+        cd = r.headers["content-disposition"]
+        assert "attachment" in cd
+        assert "filename*=UTF-8''" in cd
+        assert ".xlsx" in cd
+
+    def test_export_csv_removed(self, tmp_db, tmp_path, monkeypatch):
+        """⭐ 2026-10-20 用户指令：CSV 能力下线（⛔ 不静默降级顶替）。
+
+        ⚠️ 与 2026-10-19 的裁决相反 —— 用户明确「统一 xlsx」，理由是
+        量子密信电脑端打不开 CSV，群内与后台必须同口径。
+        """
+        backend = FakeBackend()
+        backend.results["checkin_query_records"] = self._records()
+        client = self._client(tmp_db, tmp_path, monkeypatch, backend)
+        r = client.get("/api/admin/stats/export",
+                       params={"group_id": GROUP, "biz": "checkin",
+                               "date": "2026-10-15", "format": "csv"})
         assert r.status_code == 400
-        assert "仅支持 CSV" in r.json()["detail"]
+        assert "仅支持 XLSX" in r.json()["detail"]
 
     def test_export_summary_uses_group_period(self, tmp_db, tmp_path,
                                               monkeypatch):
@@ -494,17 +499,21 @@ class TestStatsExport:
         client = logged_in_client(tmp_db, tmp_path, monkeypatch, backend)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "biz": "summary",
-                               "date": "2026-10-15", "format": "csv"})
+                               "date": "2026-10-15", "format": "xlsx"})
         assert r.status_code == 200
-        body = r.content.decode("utf-8")
-        assert "本周正常" in body
+        from io import BytesIO
+        from openpyxl import load_workbook
+        ws = load_workbook(BytesIO(r.content)).active
+        flat = "".join(str(c.value) for row in ws.iter_rows()
+                       for c in row if c.value is not None)
+        assert "本周正常" in flat
         # 文件名带 ISO 周键（带连字符口径，period.iso_week_key）
         from urllib.parse import unquote
         assert "2026-W42" in unquote(r.headers["content-disposition"])
 
     # ---------- scope=all（2026-10-19 新增：全天单表 / 三 sheet） ----------
 
-    def test_export_all_csv_single_table(self, tmp_db, tmp_path, monkeypatch):
+    def test_export_all_xlsx_single_table(self, tmp_db, tmp_path, monkeypatch):
         backend = FakeBackend()
         backend.results["checkin_query_records"] = self._records()
         backend.results["summary_query_records"] = {"records": [
@@ -519,10 +528,12 @@ class TestStatsExport:
         client = self._client(tmp_db, tmp_path, monkeypatch, backend)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "date": "2026-10-15",
-                               "scope": "all", "format": "csv"})
+                               "scope": "all", "format": "xlsx"})
         assert r.status_code == 200, r.text
-        body = r.content.decode("utf-8")
-        header = body.splitlines()[0]
+        from io import BytesIO
+        from openpyxl import load_workbook
+        ws = load_workbook(BytesIO(r.content)).active
+        header = [c.value for c in ws[1]]
         # 一天 × 全员 × 三业务 的单表口径（参考后台列序）
         for column in ("群聊名称", "成员姓名", "手机号码", "岗位角色",
                        "上午打卡时间", "上午打卡状态", "下午打卡时间",
@@ -530,19 +541,21 @@ class TestStatsExport:
                        "今日报数提交时间", "今日报数量化指标", "报数总项数",
                        "全天综合达标判定"):
             assert column in header, column
-        assert "张三" in body and "完成联调" in body and "bug修复数" in body
+        flat = "".join(str(c.value) for row in ws.iter_rows(min_row=2)
+                       for c in row if c.value is not None)
+        assert "张三" in flat and "完成联调" in flat and "bug修复数" in flat
         assert "全天全部业务执行清单" in unquote_cd(r)
 
-    def test_export_all_xlsx_rejected(self, tmp_db, tmp_path, monkeypatch):
-        """全量导出同样只支持 CSV（⛔ 三 sheet 工作簿已下线）。"""
+    def test_export_all_csv_rejected(self, tmp_db, tmp_path, monkeypatch):
+        """全量导出同样只支持 XLSX（⛔ CSV 已下线）。"""
         backend = FakeBackend()
         backend.results["checkin_query_records"] = self._records()
         client = self._client(tmp_db, tmp_path, monkeypatch, backend)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "date": "2026-10-15",
-                               "scope": "all", "format": "xlsx"})
+                               "scope": "all", "format": "csv"})
         assert r.status_code == 400
-        assert "仅支持 CSV" in r.json()["detail"]
+        assert "仅支持 XLSX" in r.json()["detail"]
 
     def test_export_all_unknown_biz_503(self, tmp_db, tmp_path, monkeypatch):
         """部分业务查不到 -> 503；⛔ 不出半张空表冒充成功。"""
@@ -551,7 +564,7 @@ class TestStatsExport:
         client = self._client(tmp_db, tmp_path, monkeypatch, backend)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "date": "2026-10-15",
-                               "scope": "all", "format": "csv"})
+                               "scope": "all", "format": "xlsx"})
         assert r.status_code == 503
         assert "稍后重试" in r.text
 
@@ -571,16 +584,21 @@ class TestStatsExport:
         client = self._client(tmp_db, tmp_path, monkeypatch, backend)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "biz": "checkin",
-                               "date": "2026-10-15", "format": "csv",
+                               "date": "2026-10-15", "format": "xlsx",
                                "remark": "例行业务归档备注"})
         assert r.status_code == 200
-        assert "例行业务归档备注" not in r.content.decode("utf-8")
+        from io import BytesIO
+        from openpyxl import load_workbook
+        ws = load_workbook(BytesIO(r.content)).active
+        flat = "".join(str(c.value) for row in ws.iter_rows()
+                       for c in row if c.value is not None)
+        assert "例行业务归档备注" not in flat
 
     def test_export_bad_biz_400(self, tmp_db, tmp_path, monkeypatch):
         client = self._client(tmp_db, tmp_path, monkeypatch, FakeBackend())
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "biz": "nope",
-                               "date": "2026-10-15", "format": "csv"})
+                               "date": "2026-10-15", "format": "xlsx"})
         assert r.status_code == 400
         # 通俗提示：不暴露技术名词
         assert "请选择要导出的业务" in r.text
@@ -589,7 +607,7 @@ class TestStatsExport:
         client = self._client(tmp_db, tmp_path, monkeypatch, FakeBackend())
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "biz": "checkin",
-                               "date": "not-a-date", "format": "csv"})
+                               "date": "not-a-date", "format": "xlsx"})
         assert r.status_code == 400
         assert "日期格式不正确" in r.text
 
@@ -598,7 +616,7 @@ class TestStatsExport:
         r = client.get("/api/admin/stats/export",
                        params={"group_id": "no-such-group",
                                "biz": "checkin", "date": "2026-10-15",
-                               "format": "csv"})
+                               "format": "xlsx"})
         assert r.status_code == 404
 
     def test_export_bad_format_400(self, tmp_db, tmp_path, monkeypatch):
@@ -613,7 +631,7 @@ class TestStatsExport:
         client = make_client(tmp_db, tmp_path)
         r = client.get("/api/admin/stats/export",
                        params={"group_id": GROUP, "biz": "checkin",
-                               "date": "2026-10-15", "format": "csv"})
+                               "date": "2026-10-15", "format": "xlsx"})
         assert r.status_code == 401
 
 

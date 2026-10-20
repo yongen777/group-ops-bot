@@ -82,35 +82,45 @@ class TestThreeFiles:
 class TestRosterView:
     """用户指令 4：全员视角 —— 没交的人也要在表里，一眼看出缺谁。"""
 
-    def test_checkin_lists_everyone_by_slot(self, tmp_db):
+    def test_checkin_merges_slots_into_one_row_per_member(self, tmp_db):
         backend = FakeBackend()
         backend.results["checkin_query_records"] = {"records": [
             {"phone": PHONE, "name": "成员1", "session": "am",
              "checkin_time": "2026-10-13T09:10:00", "status": "NORMAL",
-             "entry_source": "user"}]}
+             "entry_source": "user", "image_name": "a.png"}]}
         ctx = _setup(tmp_db)
         ctx.backend = backend
         stats_handler.handle_command(commands.parse("导出"), ctx)
 
-        rows = list(_sheet(tmp_db, "checkin").iter_rows(min_row=2,
-                                                        values_only=True))
-        # 2 人 × 2 时段 = 4 行（⛔ 只列已提交的 1 行）
-        assert len(rows) == 4
-        assert {r[2] for r in rows} == {PHONE, OTHER}
-        states = [r[1] for r in rows]
-        assert states.count("已提交") == 1        # 成员1 上午
-        assert states.count("未提交") == 1        # 成员2 上午（时段进行中）
-        assert states.count("未到时段") == 2      # 两人下午都还没到 12:00
+        ws = _sheet(tmp_db, "checkin")
+        header = [c.value for c in ws[1]]
+        # ⭐ 2026-10-20 用户指令：同一成员的多个时段**合并成一行**
+        assert header == ["序号", "手机号", "姓名", "上午", "下午",
+                          "凭证图片", "备注"]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) == 2                    # 2 人 = 2 行（⛔ 不是 2×2）
+        by_phone = {row[1]: row for row in rows}   # index 1 = 手机号
+        mine = by_phone[PHONE]
+        assert mine[3] == "09:10:00"             # 上午已打卡（只写时刻）
+        assert mine[4] == "未到打卡时间段"        # 下午还没到点
+        assert mine[5] == "已提交"                # 凭证只说状态，⛔ 不显示文件名
+        other = by_phone[OTHER]
+        assert other[3] == "未提交"               # 成员2 上午（时段进行中）
+        assert other[5] == "未提交"
 
-    def test_missing_rows_are_highlighted(self, tmp_db):
+    def test_missing_state_wording_and_cell_highlight(self, tmp_db):
+        """⭐ 只给状态**单元格**上浅底（⛔ 不整行铺粉，否则整片粉色像坏了）。"""
         ctx = _setup(tmp_db)
         stats_handler.handle_command(commands.parse("导出"), ctx)
         ws = _sheet(tmp_db, "checkin")
-        missing = [row for row in ws.iter_rows(min_row=2)
-                   if row[1].value == "未提交"]
-        assert missing, "no missing row to check"
-        rgb = missing[0][0].fill.fgColor.rgb
-        assert str(rgb).endswith("FDE8E8")        # 浅红整行，肉眼一秒定位
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                if cell.value in ("未提交", "未到打卡时间段"):
+                    assert str(cell.fill.fgColor.rgb).endswith("FDE8E8"), \
+                        cell.coordinate
+                else:
+                    assert str(cell.fill.fgColor.rgb).endswith("00000000"), \
+                        (cell.coordinate, cell.value)
 
     def test_summary_and_report_list_absent_members(self, tmp_db):
         ctx = _setup(tmp_db)      # 无任何记录 -> 全员未提交
@@ -137,7 +147,7 @@ class TestRosterView:
                                                         values_only=True))
         assert len(rows) == 3
         extra = [r for r in rows if r[2] == "22600000009"]
-        assert extra and extra[0][9] == "不在应交名单"
+        assert extra and extra[0][8] == "不在应交名单"
 
     def test_report_quantity_is_numeric(self, tmp_db):
         """数量必须是数字（⛔ 文本会让 Excel 求和变 0）。"""
@@ -152,8 +162,8 @@ class TestRosterView:
         stats_handler.handle_command(commands.parse("导出"), ctx)
         ws = _sheet(tmp_db, "report")
         header = [c.value for c in ws[1]]
-        cell = ws["G2"].value
-        assert header[6] == "bug修复数"
+        cell = ws["F2"].value          # 序号/状态/手机/姓名/时间 + 字段1
+        assert header[5] == "bug修复数"
         assert isinstance(cell, (int, float)) and cell == 3
 
 
