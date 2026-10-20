@@ -186,6 +186,16 @@ CREATE TABLE IF NOT EXISTS report_field_pool (
     PRIMARY KEY (group_id, field_id)
 );
 
+-- 报数字段 id 发号器（2026-10-20 用户指令：删除 = 物理删除）。
+-- ⛔ 字段可被真删后，next_field_id 必须取本表（⛔ 不能再用
+-- MAX(report_field_pool.field_id)+1 —— 删掉最大号后新字段会复用旧 id，
+-- 而 MySQL report_item 按 field_id 归并历史列，复用会把已删字段的历史
+-- 数量并入新字段）。last_id 只增不减，删字段 / 移除群聊都不回退。
+CREATE TABLE IF NOT EXISTS report_field_seq (
+    group_id   TEXT NOT NULL PRIMARY KEY,
+    last_id    INTEGER NOT NULL
+);
+
 -- 导出白名单（2026-10-19 用户指令：单权化）：permission_type ∈ ADMIN_ALL
 -- （一键授全部管理员操作权限，当前即一键导出打卡/总结/报数三表）。
 -- 授权对象限本群应交成员（group_member_task_config，后台下拉选择 + API 校验）。
@@ -402,7 +412,7 @@ class StateStore:
         row = conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()
         version = int(row["value"]) if row else 0
-        if version >= 9:
+        if version >= 10:
             return
 
         # ---- v2 -> v3：submit_intent.token_id + recovery_task 查证计数 ----
@@ -589,6 +599,21 @@ class StateStore:
                 " NOT NULL DEFAULT 'auto'")
         conn.execute(
             "UPDATE meta SET value=? WHERE key='schema_version'", ("9",))
+        conn.commit()
+
+        # ---- v9 -> v10（2026-10-20 用户指令：字段删除改物理删除）----
+        # 10.1 report_field_seq：字段 id 发号器。表由 _SCHEMA 的 CREATE IF
+        #      NOT EXISTS 建好（新旧库都在），这里只补种：每个已有群按现有
+        #      最大 field_id 起号，⛔ 不回退也不重复发号。
+        #      ⛔ 非破坏性：不碰 report_field_pool 任何行。
+        for r in conn.execute(
+                "SELECT group_id, COALESCE(MAX(field_id), 0) AS m"
+                " FROM report_field_pool GROUP BY group_id").fetchall():
+            conn.execute(
+                "INSERT OR IGNORE INTO report_field_seq(group_id, last_id)"
+                " VALUES(?,?)", (r["group_id"], int(r["m"])))
+        conn.execute(
+            "UPDATE meta SET value=? WHERE key='schema_version'", ("10",))
         conn.commit()
 
     def _new_conn(self) -> sqlite3.Connection:
@@ -1131,6 +1156,8 @@ class StateStore:
         满足「移除后重新接入」的语义。
         """
         counts: dict = {}
+        # ⚠️ report_field_seq 故意不删：字段 id 只增不减，群移除后重新接入
+        #    也不能回收旧号（MySQL report_item 按 field_id 归并历史列）。
         tables = ("export_whitelist", "report_field_pool",
                   "group_member_task_config", "reminder_plan",
                   "pending_session", "tokens", "submit_intent",
@@ -1217,10 +1244,50 @@ class StateStore:
             (group_id, field_id)).fetchone()
 
     def next_field_id(self, group_id: str) -> int:
+        """分配下一个字段 id（2026-10-20：字段可物理删除，⛔ 不许复用旧号）。
+
+        ⚠️ 旧的 ``MAX(field_id)+1`` 在字段被真删后会**回收**刚删掉的号：
+        MySQL ``report_item`` 按 field_id 归并历史列（stats 导出），复用会把
+        已删字段的历史数量并进新字段。故改用只增不减的 ``report_field_seq``。
+        """
         row = self._conn.execute(
-            "SELECT COALESCE(MAX(field_id), 0) AS m FROM report_field_pool WHERE group_id=?",
+            "SELECT last_id FROM report_field_seq WHERE group_id=?",
             (group_id,)).fetchone()
-        return int(row["m"]) + 1
+        if row is None:   # 本群首次发号：按现有最大 field_id 起种（旧库 / 新群）
+            mx = self._conn.execute(
+                "SELECT COALESCE(MAX(field_id), 0) AS m FROM report_field_pool"
+                " WHERE group_id=?", (group_id,)).fetchone()["m"]
+            self._conn.execute(
+                "INSERT OR IGNORE INTO report_field_seq(group_id, last_id)"
+                " VALUES(?,?)", (group_id, int(mx)))
+            row = self._conn.execute(
+                "SELECT last_id FROM report_field_seq WHERE group_id=?",
+                (group_id,)).fetchone()
+        # CAS 递增：last_id 只增不减，被并发改动就重取（单进程下极少发生）
+        for _ in range(20):
+            last = int(row["last_id"])
+            if self._conn.execute(
+                    "UPDATE report_field_seq SET last_id=? WHERE group_id=?"
+                    " AND last_id=?", (last + 1, group_id, last)).rowcount:
+                self._conn.commit()
+                return last + 1
+            row = self._conn.execute(
+                "SELECT last_id FROM report_field_seq WHERE group_id=?",
+                (group_id,)).fetchone()
+        raise RuntimeError("报数字段 id 分配失败：并发冲突")  # pragma: no cover
+
+    def delete_field(self, group_id: str, field_id: int) -> int:
+        """物理删除字段池一行（2026-10-20 用户指令）。
+
+        历史报数记录 ⛔ 不受影响：MySQL ``report_item`` 存 field_name/unit
+        快照，导出按快照出列；本表只决定「还能填哪些字段」。
+        返回删除行数（0 = 字段不存在，调用方据此判 404）。
+        """
+        cur = self._conn.execute(
+            "DELETE FROM report_field_pool WHERE group_id=? AND field_id=?",
+            (group_id, field_id))
+        self._conn.commit()
+        return cur.rowcount
 
     # ---------- 导出白名单（2026-10-19 用户指令：单权化）----------
     # ⛔ 推翻 v4 按业务分权（EXPORT_CHECKIN/SUMMARY/REPORT 三权）：

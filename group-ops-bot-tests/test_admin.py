@@ -594,14 +594,24 @@ class TestFieldAdmin:
             "/api/admin/groups/%s/fields" % GROUP).json()["fields"]
         assert fields[0]["field_name"] == "销售额(万元)"
         assert fields[0]["enabled"] is False
-        # 删除 = 停用（⛔ 不物理删除：历史报数引用 field_id 快照）
+        # 2026-10-20 用户指令：删除 = **物理删除该字段**（⛔ 不再降级成停用）
         resp = mutate(client, "DELETE",
                       "/api/admin/groups/%s/fields/1" % GROUP)
         assert resp.status_code == 200
-        assert "停用" in resp.json()["message"]
+        assert "删除" in resp.json()["message"]
         fields = client.get(
             "/api/admin/groups/%s/fields" % GROUP).json()["fields"]
-        assert len(fields) == 1  # 行仍在（停用）
+        assert fields == []          # 行真删了（⛔ 不是 enabled=False 留着）
+        # 再删同一字段 -> 404（⛔ 不伪装成功）
+        assert mutate(client, "DELETE",
+                      "/api/admin/groups/%s/fields/1" % GROUP
+                      ).status_code == 404
+        # 删掉最大号后新建字段 ⛔ 不复用旧 id（MySQL report_item 按 field_id
+        # 归并历史列，复用会把已删字段的历史数量并进新字段）
+        resp = mutate(client, "POST",
+                      "/api/admin/groups/%s/fields" % GROUP,
+                      {"field_name": "新增字段"})
+        assert resp.json()["field_id"] == 2
 
 
 # ---------- API：审计 ----------

@@ -856,16 +856,19 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_password_changed(identity)
         _require_csrf(request, identity)
         _group_row(state, group_id)
-        # 字段停用而非删除：历史报数引用 field_id 快照，删除会断历史归并（§2.12）
+        # 2026-10-20 用户指令：删除 = **物理删除该字段**（⛔ 不再是停用）。
+        # 历史报数 ⛔ 不受影响：MySQL report_item 存 field_name/unit 快照，
+        # 导出按快照出列；本表只决定「还能填哪些字段」。想保留只想暂停填报
+        # 的，用 PUT enabled=false（前端「停用 / 启用」按钮）。
         row = state.get_field(group_id, field_id)
         if row is None:
             raise HTTPException(status_code=404, detail="字段不存在")
-        state.upsert_field(group_id, field_id, row["field_name"], row["unit"],
-                           row["roles"], False, row["sort_order"])
-        _audit(state, request, identity, "field.disable", "field",
+        state.delete_field(group_id, field_id)
+        _audit(state, request, identity, "field.delete", "field",
                "%s/%s" % (group_id, field_id),
-               {"note": "停用而非删除：历史记录保留快照"})
-        return {"ok": True, "message": "字段已停用（历史数据保留）"}
+               {"field_name": row["field_name"],
+                "note": "物理删除字段池行；历史报数按 MySQL 快照保留"})
+        return {"ok": True, "message": "字段已删除（历史报数记录保留）"}
 
     # ---------- 审计 ----------
 

@@ -459,7 +459,7 @@ export const GroupManagement: React.FC = () => {
     if (!deletingField) return;
     try {
       await api.del(`/api/admin/groups/${gid(selectedGroupId)}/fields/${deletingField.field_id}`);
-      showToast(`字段【${deletingField.field_name}】已停用（历史数据保留）`);
+      showToast(`字段【${deletingField.field_name}】已删除（历史报数记录保留）`);
       setDeletingField(null);
       await loadFields();
     } catch (err: any) {
@@ -1643,14 +1643,17 @@ export const GroupManagement: React.FC = () => {
       {deletingField && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-2xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 space-y-4">
-            <div className="w-10 h-10 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+            <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div className="text-center space-y-1">
-              <h3 className="font-bold text-sm text-slate-900">确认停用该报数字段？</h3>
+              <h3 className="font-bold text-sm text-slate-900">确认删除该报数字段？</h3>
               <p className="text-xs text-slate-500">
-                字段【{deletingField.field_name}】将从可填报列表中移除；
-                已有报数记录保留字段快照，历史数据不受影响。
+                字段【{deletingField.field_name}】将从字段池中<strong className="text-rose-600">彻底删除</strong>，
+                群成员和后台补录都不再能填报；已有报数记录保留字段快照，历史数据与导出不受影响。
+              </p>
+              <p className="text-[11px] text-slate-400 pt-1">
+                只想暂时停止填报、保留字段？请用列表里的「停用」。
               </p>
             </div>
             <div className="flex justify-end gap-2 pt-2">
@@ -1664,7 +1667,7 @@ export const GroupManagement: React.FC = () => {
                 onClick={deleteField}
                 className="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold cursor-pointer shadow-xs"
               >
-                确认停用
+                确认删除
               </button>
             </div>
           </div>
