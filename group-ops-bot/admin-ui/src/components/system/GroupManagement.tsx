@@ -626,15 +626,24 @@ export const GroupManagement: React.FC = () => {
                       showToast('打卡时间段最多支持设置 6 个区间', 'error');
                       return;
                     }
-                    setSlots((prev) => [
-                      ...prev,
-                      {
-                        id: `s${Date.now().toString(36)}`,
-                        name: `时段${prev.length + 1}`,
-                        start: '18:00',
-                        end: '19:00',
-                      },
-                    ]);
+                    setSlots((prev) => {
+                      // ⭐ 2026-10-20：时段 id 必须 <= 8 字符 —— checkin_record.session
+                      // 是 VARCHAR(16)，而旧实现的「s + 时间戳 base36」是 9 字符且
+                      // 与后端 _SLOT_ID_RE 的历史口径不一致；改用稳定短 id
+                      // （slot_1 ~ slot_8，后端 MAX_SLOTS = 8），并避开已占用的编号。
+                      const used = new Set(prev.map((s) => s.id));
+                      let idx = prev.length + 1;
+                      while (used.has(`slot_${idx}`)) idx += 1;
+                      return [
+                        ...prev,
+                        {
+                          id: `slot_${idx}`,
+                          name: `时段${prev.length + 1}`,
+                          start: '18:00',
+                          end: '19:00',
+                        },
+                      ];
+                    });
                     showToast('已添加新的打卡时段，保存后生效');
                   }}
                   className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1"

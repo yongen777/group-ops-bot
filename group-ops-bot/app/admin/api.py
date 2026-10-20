@@ -1066,7 +1066,7 @@ def create_admin_router(*, state: StateStore, backend: Backend,
 
         与自动调度（reminder.tick）共用 run_group：同一套开关门控 /
         差集判定 / 5 分钟冷却 / 落库，⛔ 不搞第二套逻辑。
-        manual=True：跳过「到点才判定」时间门控（打卡取全部未结束时段）。
+        manual=True：跳过「到点才判定」时间门控（打卡只取当前时段）。
         ⚠️ 推送端口未接通时如实记 unsent（⛔ 不伪造已发送）。
         """
         identity = _identity(request, state)
@@ -1105,6 +1105,14 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                     "message": "今日打卡时段已过，无需提醒（补交请走后台补录）",
                     "summary": summary}
         cooled = summary.get("skipped_cooled", 0)
+        # ⭐ 2026-10-20（P0-3）：全员已达标的「空转」要说人话 ——
+        # 旧回执是「已执行一轮全部业务提醒（新计划 0 条，发送 0 条）」，
+        # 管理员看不出到底是没触发、还是都完成了、还是时段过了。
+        if summary["sent"] == 0 and summary["new"] == 0 and cooled == 0:
+            return {"ok": True,
+                    "message": "当前没有需要提醒的未完成成员"
+                               "（或今日打卡时段已结束）",
+                    "summary": summary}
         suffix = "（%d 人处于 5 分钟冷却内，未重复打扰）" % cooled if cooled else ""
         return {"ok": True,
                 "message": "已执行一轮%s提醒（新计划 %d 条，发送 %d 条）%s"
@@ -1207,8 +1215,10 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                                 detail="数据暂时查不到，请稍后重试")
         filename = stats_mod.export_filename(group_name, biz, period_k,
                                              format)
-        content = stats_mod.to_csv(biz, records,
-                                   period_type).encode("utf-8")
+        # ⭐ 2026-10-20（P1-2）：单业务导出带上本群时段名（自定义时段不再显示成「下午」）
+        slot_labels = stats_mod.slot_labels_for(state, group_id)
+        content = stats_mod.to_csv(biz, records, period_type,
+                                   slot_labels).encode("utf-8")
         media = "text/csv; charset=utf-8"
         _audit(state, request, identity, "stats.export", "group", group_id,
                {"scope": "single", "biz": biz, "format": format,

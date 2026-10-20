@@ -298,6 +298,10 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
                            "enabled": bool(item["enabled"])}
     except Exception:  # pragma: no cover
         pass
+    # ⭐ 2026-10-20（P0-4）：分母先落定，分子只数「在岗考核」的人。
+    # enabled_total == 0（全员未配置 / 全员暂停）时保留旧兜底口径 ——
+    # 否则分子恒 0，页面会出现「0/0 已完成」的假象。
+    enabled_total = sum(1 for item in roster.values() if item["enabled"])
 
     # ---- 记录归并 ----
     checkin_map: dict = {}
@@ -368,7 +372,10 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
                 if all(c["status"] == "backfilled"
                        for c in member["checkin"].values())
                 else "completed")
-            checkin_done += 1
+            # ⭐ 2026-10-20（P0-4）：已暂停考核的成员提交了也⛔ 不计入分子
+            # （否则分子可能 > 分母 enabled_total，页面显示「3/2 已完成」）。
+            if member["enabled"] or not enabled_total:
+                checkin_done += 1
         else:
             states = [c["status"] for c in member["checkin"].values()]
             if day_past or (date_str == today
@@ -386,7 +393,8 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
             member["summary_status"] = ("backfilled"
                                         if str(srec.get("entry_source"))
                                         == "admin" else "completed")
-            summary_done += 1
+            if member["enabled"] or not enabled_total:
+                summary_done += 1
         else:
             member["summary"] = None
             member["summary_status"] = _missing_status(
@@ -401,7 +409,8 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
             member["report_status"] = ("backfilled"
                                        if str(rrec.get("entry_source"))
                                        == "admin" else "completed")
-            report_done += 1
+            if member["enabled"] or not enabled_total:
+                report_done += 1
         else:
             member["report"] = None
             member["report_status"] = _missing_status(
@@ -412,7 +421,6 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
 
         members.append(member)
 
-    enabled_total = sum(1 for item in roster.values() if item["enabled"])
     return {
         "ok": True,
         "date": date_str,

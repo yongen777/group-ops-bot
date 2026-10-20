@@ -216,6 +216,14 @@ class McpSseAdapter(Backend):
         self._session: Optional[_SseSession] = None
         self._idle_since: Optional[float] = None
         self._lock = threading.Lock()
+        # ⭐ 2026-10-20（P0-2）：调用级串行锁。:18002 / :18003 / scheduler
+        # 三个线程共享同一个适配器实例：只锁「取会话」不够 —— 两个线程可能
+        # 同时拿到同一 session 并发操作同一个 httpx.Client（连接状态互相污染），
+        # 或某线程判定会话失活后 close() 掉另一线程正在等响应的 _session
+        #（在途 tools/call 半途断流）。故把 _ensure_session() 与 _rpc()
+        # 收进同一把可重入锁里串行执行。
+        # ⛔ 只串行化，不重试：已发出的 tools/call 失败仍抛 BackendError。
+        self._call_lock = threading.RLock()
 
     # ---------- 会话 ----------
 
@@ -251,10 +259,14 @@ class McpSseAdapter(Backend):
             return self._session
 
     def _call_tool(self, name: str, arguments: dict) -> dict:
-        session = self._ensure_session()
-        message = session._rpc("tools/call",
-                               {"name": name, "arguments": arguments},
-                               self._timeout)
+        # ⭐ 2026-10-20（P0-2）：`_call_lock` 覆盖「取会话 + 收发」整段 ——
+        # 杜绝并发线程在 _rpc 等待期间把 _session 关闭或污染 Client 连接。
+        # ⛔ 出了 with 才解析结果：解析失败与锁无关，且缩短持锁时间。
+        with self._call_lock:
+            session = self._ensure_session()
+            message = session._rpc("tools/call",
+                                   {"name": name, "arguments": arguments},
+                                   self._timeout)
         if "error" in message:
             err = message["error"] or {}
             raise BackendError("MCP tool %s JSON-RPC error %s: %s"

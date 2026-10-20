@@ -29,8 +29,9 @@
   那是推送失败的容错，⛔ 不是重复打扰。根因：旧顺序先 push 后判冷却，
   8 分钟触发窗口 × 60s 轮询 = 窗口内每轮都重发。
 - ✅ 手动提醒（2026-10-16 用户指令三）：管理后台按业务「立即提醒」
-  （run_group(biz=..., manual=True)）—— 跳过时间门控，取全部未结束时段
-  （打卡）/ 直接判定（总结 / 报数），与自动调度同一套判定 / 冷却 / 落库，
+  （run_group(biz=..., manual=True)）—— 跳过时间门控，打卡只取
+  **当前时段**（2026-10-20 改：⛔ 不再把未到点的下午一起催）
+  / 直接判定（总结 / 报数），与自动调度同一套判定 / 冷却 / 落库，
   ⛔ 不搞第二套逻辑。手动路径 5 分钟冷却已过**可重发**（含已发送记录，
   管理员主动催；只防连点轰炸）。
 
@@ -45,16 +46,18 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 from .. import period as period_mod
-from ..backend.base import Backend
+from ..backend.base import Backend, BackendError
 from ..state import StateStore
 from .base import BOT_MENTION_NAME
 
 BIZ = "reminder"
+LOG = logging.getLogger("group-ops.reminder")
 
 DEFAULT_REMINDER_RULES = {
     "checkin": ["09:00", "14:50"],
@@ -370,7 +373,7 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
     参数（用户指令 2026-10-16 三：按业务一键手动提醒）：
     - biz：只跑该业务（None = 三个业务全跑；自动调度用 None）
     - manual：管理员手动触发 -> ⛔ 跳过「到点才判定」的时间门控：
-        打卡取**全部未结束时段**（已结束时段 submission 已阻断，提醒无意义）；
+        打卡只取**当前时段**（已结束时段 submission 已阻断，提醒无意义；
         总结 / 报数直接判定一轮。防重走 5 分钟冷却（连点不轰炸），
         冷却已过**可重发**（含本期已发送过的记录）。
 
@@ -410,7 +413,7 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
         # ⭐ 打卡业务：提醒时刻 = 时段开始时间（2026-10-16 用户指令四）
         # ⛔ 不再用「已过 rule.times 即触发」——那会在时段中途反复命中，
         #    配合冷却就表现为用户报的「配了 09:00 却 09:30 才提醒」。
-        # ⭐ 手动触发（manual=True）：跳过时间门控，取全部未结束时段。
+        # ⭐ 手动触发（manual=True）：跳过时间门控，只取当前时段。
         if one == "checkin":
             if manual:
                 # ⭐ 2026-10-20：只催「当前时段」（不在时段内则催下一场），
@@ -423,7 +426,12 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
         else:
             triggered = [t for t in rule["times"] if _passed(now, t)]
         if not triggered:
-            if manual and one == "checkin":
+            # ⭐ 2026-10-20（P0-3）：只有**显式单业务**催打卡（biz == "checkin"）
+            # 才把 "checkin_all_done" 写进 skipped。一键催办全部业务（biz is None）
+            # 时打卡时段已过只是「这一项跳过」，⛔ 不能把整轮结果标成
+            # checkin_all_done —— 那会让后台把「总结 / 报数的未完成成员」
+            # 也一并当成「今日打卡时段已过」而不发，误报又漏发。
+            if manual and biz == "checkin" and one == "checkin":
                 summary["skipped"] = "checkin_all_done"
             continue
         # ⭐ 判定对象 = **本轮触发的时段**（而非"所有已结束时段"）：
@@ -502,13 +510,43 @@ def tick(state: StateStore, backend: Backend, push, now: datetime) -> dict:
 
     ⛔ 不静默：后端不可用则整轮放弃；推送未接通记 unsent。
     单群细节（门控 / 冷却 / 落库）见 run_group。
+
+    ⭐ 2026-10-20（P1-1）：**单群异常隔离** —— 一个群抛异常只记进
+    errors 并继续跑下一个群，⛔ 不能让某个群的坏配置 / 坏数据把所有群
+    的提醒一起断更。
+    例外（保持既有「后端完全宕机」语义）：本轮**所有**群都失败、且首个
+    异常是 BackendError -> 向上抛出，交调度线程统一记录（那是基础设施
+    整体不可用，不是单群问题，继续跑也没有意义）。
     """
     summary = {"groups": 0, "targets": 0, "new": 0, "sent": 0,
                "unsent": 0, "errors": []}
+    failed = 0
+    first_error: Optional[BaseException] = None
     for group_row in state.list_groups():
         summary["groups"] += 1
-        part = run_group(state, backend, push, group_row, now)
+        group_id = str(group_row["group_id"])
+        try:
+            part = run_group(state, backend, push, group_row, now)
+        except BackendError as exc:
+            # 后端类异常：记录后继续 —— 但若全群都失败则在循环后上抛
+            failed += 1
+            if first_error is None:
+                first_error = exc
+            summary["errors"].append("%s: %s" % (group_id, exc))
+            LOG.warning("reminder group skipped (backend): group=%s err=%s",
+                        group_id, exc)
+            continue
+        except Exception as exc:   # 单群逻辑异常（坏配置 / 脏数据）
+            failed += 1
+            if first_error is None:
+                first_error = exc
+            summary["errors"].append("%s: %s" % (group_id, exc))
+            LOG.exception("reminder group failed: group=%s", group_id)
+            continue
         for key in ("targets", "new", "sent", "unsent"):
             summary[key] += part[key]
         summary["errors"].extend(part["errors"])
+    if summary["groups"] and failed == summary["groups"] \
+            and isinstance(first_error, BackendError):
+        raise first_error
     return summary

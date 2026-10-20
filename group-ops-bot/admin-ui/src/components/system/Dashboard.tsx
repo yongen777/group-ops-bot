@@ -157,20 +157,35 @@ export const Dashboard: React.FC = () => {
   const slots = board?.slots || [];
   const members = board?.members || [];
   const counts = board?.counts;
+  // ⭐ 2026-10-20（P0-4）：考核口径只看**本群已开启**的业务。
+  // 旧实现无条件要求打卡 + 总结 + 报数全齐，于是「本群只开了打卡」时
+  // 全员永远算未完成，待补录名单把所有人列进去 —— 误报。
+  const switches = board?.group?.switches || {
+    checkin: true,
+    summary: true,
+    report: true,
+  };
 
   const overallDone = useCallback(
-    (member: BoardMember) => slots.every((slot) => member.checkin[slot.id]?.time)
-      && !!member.summary && !!member.report,
-    [slots],
+    (member: BoardMember) => {
+      const checkinOk =
+        !switches.checkin || slots.every((slot) => member.checkin[slot.id]?.time);
+      const summaryOk = !switches.summary || !!member.summary;
+      const reportOk = !switches.report || !!member.report;
+      return checkinOk && summaryOk && reportOk;
+    },
+    [slots, switches.checkin, switches.summary, switches.report],
   );
 
+  // ⭐ 2026-10-20（P1-A）：已暂停考核（enabled === false）的成员不进
+  // 异常名单 / 完成名单 —— 他们本来就不参与考核，不该按「未完成」催办。
   const pendingMembers = useMemo(
-    () => members.filter((m) => !overallDone(m)),
+    () => members.filter((m) => m.enabled !== false && !overallDone(m)),
     [members, overallDone],
   );
 
   const completedMembers = useMemo(
-    () => members.filter((m) => overallDone(m)),
+    () => members.filter((m) => m.enabled !== false && overallDone(m)),
     [members, overallDone],
   );
 

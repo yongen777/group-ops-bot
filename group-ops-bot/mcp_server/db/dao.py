@@ -36,7 +36,20 @@ class Dao:
     def upsert_user(self, cur, phone: str, name: Optional[str],
                     platform_user_id: Optional[str], department: Optional[str],
                     source: str) -> int:
-        """按 phone upsert（手机号是稳定自然键，§4.11.1 user.upsert）。"""
+        """按 phone upsert（手机号是稳定自然键，§4.11.1 user.upsert）。
+
+        ⭐ 2026-10-20（P0-4 防御）：写之前先解绑**同一 platform_user_id 挂在
+        其他手机号上**的残留。跨群 / 员工换号重新绑定时，平台 id 不变而
+        phone 变，若不清理就会出现「一个平台 id 对应两个手机号」的脏数据；
+        一旦日后给 platform_user_id 加唯一索引，这条脏数据会让 upsert 直接
+        报 1062 冲突。清理只动**别的手机号**那几行（phone <> %s），
+        ⛔ 不动本行自己的绑定。
+        """
+        if platform_user_id:
+            cur.execute(
+                "UPDATE %s SET platform_user_id = NULL"
+                " WHERE platform_user_id = %%s AND phone <> %%s" % T_USER,
+                (platform_user_id, phone))
         cur.execute(
             "INSERT INTO %s (phone, platform_user_id, name, department, source,"
             " created_time, updated_time)"

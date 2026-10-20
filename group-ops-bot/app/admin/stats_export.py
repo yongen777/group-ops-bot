@@ -67,18 +67,44 @@ def _fmt_quantity(value) -> str:
     return str(number)
 
 
-def records_to_rows(biz: str, records: list, period_type: str = "") -> tuple:
-    """记录 -> (表头, 数据行)。列口径与机器人侧导出一致。"""
+def slot_labels_for(state: StateStore, group_id: str) -> dict:
+    """本群时段 id -> 中文显示名（⭐ 2026-10-20 P1-2）。
+
+    与机器人侧 stats._slot_labels 同口径：优先取群配置的时段名，
+    回落产品默认（am=上午 / pm=下午），再命中不了就原样输出 session。
+    ⛔ 旧实现一律「非 am 即下午」，自定义时段（slot_N「晚班」）导出全错。
+    """
+    labels = dict(SESSION_LABEL)
+    try:
+        from .board import _slots as _board_slots
+        row = state.get_group_config(group_id)
+        for slot in _board_slots(row) if row is not None else []:
+            sid = str(slot.get("id") or "").strip()
+            name = str(slot.get("name") or "").strip()
+            if sid and name:
+                labels[sid] = name
+    except Exception:  # 配置读不到不影响统计主流程（回落默认标签）
+        pass
+    return labels
+
+
+def records_to_rows(biz: str, records: list, period_type: str = "",
+                    slot_labels: Optional[dict] = None) -> tuple:
+    """记录 -> (表头, 数据行)。列口径与机器人侧导出一致。
+
+    slot_labels：本群时段 id -> 显示名（缺省 = 产品默认 am/pm 标签）。
+    """
     if biz == "checkin":
         headers = ["手机号", "姓名", "时段", "打卡时间", "状态", "录入来源",
                    "图片名"]
+        labels = slot_labels or SESSION_LABEL
         rows = []
         for rec in records:
             session = rec.get("session") or ""
             rows.append([
                 rec.get("phone") or "",
                 rec.get("name") or "",
-                SESSION_LABEL.get(session, session),
+                labels.get(session) or SESSION_LABEL.get(session, session),
                 rec.get("checkin_time") or "",
                 STATUS_LABEL.get(rec.get("status"), rec.get("status") or ""),
                 SOURCE_LABEL.get(rec.get("entry_source"),
@@ -169,21 +195,26 @@ def safe_name(text: str, limit: int = 40) -> str:
                    for ch in (text or "群"))[:limit]
 
 
-def to_csv(biz: str, records: list, period_type: str = "") -> str:
+def to_csv(biz: str, records: list, period_type: str = "",
+           slot_labels: Optional[dict] = None) -> str:
     """CSV 文本（带 BOM）。"""
-    headers, rows = records_to_rows(biz, records, period_type)
+    headers, rows = records_to_rows(biz, records, period_type, slot_labels)
     return rows_to_csv(headers, rows)
 
 
-def to_xlsx(biz: str, records: list, period_type: str = "") -> bytes:
+def to_xlsx(biz: str, records: list, period_type: str = "",
+            slot_labels: Optional[dict] = None) -> bytes:
     """XLSX 字节流。"""
-    headers, rows = records_to_rows(biz, records, period_type)
+    headers, rows = records_to_rows(biz, records, period_type, slot_labels)
     return multi_sheet_xlsx([(BIZ_LABEL[biz], headers, rows)])
 
 
 def build_stats(state: StateStore, backend: Backend, group_id: str, biz: str,
-                period_key: str) -> dict:
-    """页面用的多维统计（纯读）。"""
+                period_key: str, slot_labels: Optional[dict] = None) -> dict:
+    """页面用的多维统计（纯读）。
+
+    slot_labels：本群时段 id -> 显示名（缺省自动从群配置解析）。
+    """
     records = query_records(backend, biz, group_id, period_key)
     try:
         members = len(list(state.list_member_tasks(group_id,
@@ -202,7 +233,11 @@ def build_stats(state: StateStore, backend: Backend, group_id: str, biz: str,
         "records": records,
         "dimensions": [],
     }
-    headers, table_rows = records_to_rows(biz, records, "")
+    # 时段显示名（仅打卡业务需要；summary / report 不读时段配置）
+    labels = None
+    if biz == "checkin":
+        labels = slot_labels or slot_labels_for(state, group_id)
+    headers, table_rows = records_to_rows(biz, records, "", labels)
     stats["table"] = {"headers": headers, "rows": table_rows}
 
     if biz == "checkin":
@@ -222,7 +257,10 @@ def build_stats(state: StateStore, backend: Backend, group_id: str, biz: str,
             session_counts[session] = session_counts.get(session, 0) + 1
         for session, count in sorted(session_counts.items(),
                                      key=lambda item: str(item[0])):
-            label = SESSION_LABEL.get(session, session)
+            # ⭐ 2026-10-20（P1-2）：时段维度也走本群配置名，⛔ 不写死 am/pm
+            label = (session if session == "未标注" else
+                     ((labels or {}).get(session)
+                      or SESSION_LABEL.get(session, session)))
             stats["dimensions"].append(("打卡时段", label, count))
 
     elif biz == "summary":

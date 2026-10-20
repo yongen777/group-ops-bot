@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS `checkin_record` (
   `user_id`      BIGINT       NOT NULL COMMENT '-> sys_user.id',
   `group_id`     VARCHAR(64)  NOT NULL COMMENT '群标识',
   `period_key`   VARCHAR(32)  NOT NULL COMMENT '不透明周期串（机器人生成，自然日 YYYY-MM-DD）',
-  `session`      VARCHAR(8)   NOT NULL COMMENT 'am / pm（12:00 分界，§2.3）',
+  `session`      VARCHAR(16)  NOT NULL COMMENT '打卡时段标识（am / pm / slot_N，§2.3）',
   `checkin_time` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '服务端时间 UTC+8',
   `image_ref`    VARCHAR(255) NULL COMMENT '存储标识（§4.11.4）；免图打卡为 NULL',
   `image_name`   VARCHAR(255) NULL COMMENT '原始文件名留档',
@@ -151,4 +151,18 @@ CREATE TABLE IF NOT EXISTS `operation_log` (
 --   SHOW INDEX FROM checkin_record;                -- 确认 uq_checkin_scope 四列
 --   SHOW INDEX FROM operation_log;                 -- 确认 uq_operation_log_request
 --   SELECT @@version, @@time_zone, @@character_set_server;
+-- -----------------------------------------------------------------------------
+-- 【增量变更】2026-10-20：checkin_record.session VARCHAR(8) -> VARCHAR(16)
+--   原因：后台新增自定义打卡时段使用 slot_N 形式标识，旧长度 8 会让
+--   9 字符以上的时段 id 在写入时被 MySQL 严格模式拒绝（P0-1）。
+--   本文件是「新建库」的全量 DDL（已按 VARCHAR(16) 定义）；
+--   ⚠️ 已建表的环境需单独执行下面这条在线扩容（仅改元数据，不锁表数据、
+--   不改任何既有值；⛔ 未经批准不得由程序自动执行）：
+--
+--   ALTER TABLE checkin_record MODIFY COLUMN session VARCHAR(16) NOT NULL COMMENT '打卡时段标识';
+--
+--   ✅ 执行记录：2026-10-20 11:05 已在线上库（qsm，219.151.177.33:28619）执行完毕，
+--      `SHOW FULL COLUMNS FROM checkin_record LIKE 'session'` 实测
+--      Type=varchar(16) / Comment=打卡时段标识，表内 3 行数据完好。
+--      （新环境按上面注释定义建表即可，⛔ 不需要再执行本 ALTER。）
 -- -----------------------------------------------------------------------------

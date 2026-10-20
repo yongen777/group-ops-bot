@@ -87,17 +87,21 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = FILE_STEM % ctx.now.strftime("%Y%m%d_%H%M")
     sender = getattr(ctx.sender, "send_file", None)
+    # ⭐ 2026-10-20（P1-2）：时段显示名按本群配置解析，⛔ 不再写死
+    # 「am=上午 / 其余=下午」。（自定义时段如 slot_3「晚班」必须显真名）
+    slot_labels = _slot_labels(ctx)
 
     # ⭐ 2026-10-20 用户指令：**优先 CSV**（与后台导出口径一致）；
     # CSV 发不出去才回落 xlsx（三 sheet 全量版）。⛔ 两种都失败才如实报失败。
     csv_path = out_dir / (stem + ".csv")
-    csv_path.write_bytes(build_all_export_csv(records, periods))
+    csv_path.write_bytes(build_all_export_csv(records, periods, slot_labels))
     if _try_send_file(sender, ctx.group_id, csv_path):
         return EXPORT_SENT_TEXT
 
     xlsx_path = out_dir / (stem + ".xlsx")
     xlsx_path.write_bytes(
-        build_all_export_workbook(records, periods, summary_ptype))
+        build_all_export_workbook(records, periods, summary_ptype,
+                                  slot_labels))
     if _try_send_file(sender, ctx.group_id, xlsx_path):
         return EXPORT_SENT_TEXT
     return EXPORT_SEND_FAILED_TEXT
@@ -128,6 +132,28 @@ def _period_for(biz: str, summary_ptype, now) -> str:
     return period_mod.daily_key(now)
 
 
+def _slot_labels(ctx: HandlerContext) -> dict:
+    """本群时段 id -> 显示名（⭐ 2026-10-20 P1-2）。
+
+    旧实现把 session 硬编码成「am=上午 / 其余=下午」，自定义时段（slot_3
+    之类的「晚班」）一律被写成「下午」—— 多群各自配时段时导出表直接错。
+    现在优先取本群 checkin_slots 配置里的 name；未命中回落产品默认标签，
+    再命中不了就原样输出 session 标识（⛔ 不猜）。
+    """
+    labels = dict(SESSION_LABEL)
+    try:
+        from . import checkin as checkin_handler
+        for slot in checkin_handler.configured_slots(ctx):
+            sid = str(slot.get("id") or "").strip()
+            name = str(slot.get("name") or "").strip()
+            if sid and name:
+                labels[sid] = name
+    except Exception:  # 配置读不到不影响导出主流程（回落默认标签）
+        LOG.warning("slot labels fallback: group=%s", ctx.group_id,
+                    exc_info=True)
+    return labels
+
+
 def _query_records(ctx: HandlerContext, biz: str, period_k: str) -> list:
     """按业务查一个周期的记录（⛔ 不跨业务混查）。"""
     query = {"checkin": ctx.backend.checkin_query_records,
@@ -137,7 +163,8 @@ def _query_records(ctx: HandlerContext, biz: str, period_k: str) -> list:
                  period_key=period_k).get("records", [])
 
 
-def build_all_export_csv(records: dict, periods: dict) -> bytes:
+def build_all_export_csv(records: dict, periods: dict,
+                         slot_labels: dict = None) -> bytes:
     """一键导出的 CSV：**单一宽表**，三业务各成若干行（用「业务」列区分）。
 
     ⭐ 2026-10-20 用户指令：群内导出与后台导出口径统一 —— **优先 CSV**。
@@ -150,12 +177,13 @@ def build_all_export_csv(records: dict, periods: dict) -> bytes:
     for biz in commands.EXPORT_ALL_BIZS:
         period_k = periods.get(biz) or ""
         for rec in records.get(biz) or []:
-            writer.writerow(_csv_row(biz, period_k, rec))
+            writer.writerow(_csv_row(biz, period_k, rec, slot_labels))
     # utf-8-sig：Excel 双击打开不乱码（⛔ 不能只写 utf-8）
     return buffer.getvalue().encode("utf-8-sig")
 
 
-def _csv_row(biz: str, period_k: str, rec: dict) -> list:
+def _csv_row(biz: str, period_k: str, rec: dict,
+             slot_labels: dict = None) -> list:
     """一条业务记录 -> CSV 行（列序与 CSV_HEADER 严格对齐）。"""
     phone = rec.get("phone") or ""
     name = rec.get("name") or ""
@@ -164,8 +192,9 @@ def _csv_row(biz: str, period_k: str, rec: dict) -> list:
                               rec.get("entry_source") or "")
     if biz == "checkin":
         session = rec.get("session") or ""
+        labels = slot_labels or SESSION_LABEL
         return ["打卡", phone, name, rec.get("period_key") or period_k,
-                SESSION_LABEL.get(session, session),
+                labels.get(session) or SESSION_LABEL.get(session, session),
                 _fmt_time(rec.get("checkin_time")), status,
                 source, rec.get("image_name") or ""]
     if biz == "summary":
@@ -206,7 +235,8 @@ def _fmt_qty(value) -> str:
 
 
 def build_all_export_workbook(records: dict, periods: dict,
-                              summary_ptype=None) -> bytes:
+                              summary_ptype=None,
+                              slot_labels: dict = None) -> bytes:
     """一键导出的 XLSX：三个 sheet（打卡 / 总结 / 报数）。
 
     records[biz] = 该业务当期记录；periods[biz] = 该业务当期周期键
@@ -216,14 +246,15 @@ def build_all_export_workbook(records: dict, periods: dict,
     wb.remove(wb.active)
     for biz in commands.EXPORT_ALL_BIZS:
         ws = wb.create_sheet(title=EXPORT_LABEL[biz])
-        _fill_sheet(ws, biz, summary_ptype, records.get(biz) or [])
+        _fill_sheet(ws, biz, summary_ptype, records.get(biz) or [],
+                    slot_labels)
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
 
 
 def build_export_workbook(biz: str, period_type, period_key: str,
-                          records: list) -> bytes:
+                          records: list, slot_labels: dict = None) -> bytes:
     """生成单业务 XLSX（纯函数，便于测试）。
 
     - checkin / summary：固定列表格
@@ -232,21 +263,25 @@ def build_export_workbook(biz: str, period_type, period_key: str,
     """
     wb = Workbook()
     ws = wb.active
-    _fill_sheet(ws, biz, period_type, records)
+    _fill_sheet(ws, biz, period_type, records, slot_labels)
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
 
 
-def _fill_sheet(ws, biz: str, period_type, records: list) -> None:
+def _fill_sheet(ws, biz: str, period_type, records: list,
+                slot_labels: dict = None) -> None:
     """把一个业务的记录写进给定 sheet（单业务与一键导出共用 ⛔ 单一真相）。"""
     if biz == "checkin":
         ws.title = "打卡"
         ws.append(["手机号", "姓名", "时段", "打卡时间", "状态", "录入来源",
                    "图片名"])
+        labels = slot_labels or SESSION_LABEL
         for rec in records:
+            session = rec.get("session") or ""
             ws.append([rec.get("phone"), rec.get("name") or "",
-                       "上午" if rec.get("session") == "am" else "下午",
+                       labels.get(session)
+                       or SESSION_LABEL.get(session, session),
                        rec.get("checkin_time") or "",
                        rec.get("status") or "", rec.get("entry_source") or "",
                        rec.get("image_name") or ""])
