@@ -35,11 +35,18 @@ TTL_MINUTES = 10
 
 CANCEL_TEXT = "取消"
 
-ASK_TEXT = ("请发送您的「姓名 手机号」（例如：郑佳 13800000000），"
-            "%d 分钟内有效；如需放弃请回复：取消" % TTL_MINUTES)
+# ⭐ 2026-10-20 用户指令：示例 ⛔ 不再拿真人姓名/号码当模板，统一写「xx 手机号」
+_ASK_EXAMPLE = "（例如：xx 手机号）"
 
-FORMAT_ERROR_TEXT = ("输入格式有误。请重新发送「姓名 手机号」"
-                     "（例如：郑佳 13800000000），或回复：取消")
+ASK_TEXT = ("请发送您的「姓名 手机号」%s，"
+            "%d 分钟内有效；如需放弃请回复：取消" % (_ASK_EXAMPLE, TTL_MINUTES))
+
+FORMAT_ERROR_TEXT = ("输入格式有误。请重新发送「姓名 手机号」%s，或回复：取消"
+                     % _ASK_EXAMPLE)
+
+# ⭐ 2026-10-20 用户指令：已实名过的人再发「实名」-> 直接拦住（⛔ 不重复登记）
+ALREADY_REGISTERED_TEXT = ("您已完成实名登记（姓名：{name}，手机号：{masked}），"
+                           "无需重复提交；如需变更请联系群管理员。")
 
 CANCELED_TEXT = "已取消实名登记。"
 
@@ -51,10 +58,35 @@ _PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 _NAME_RE = re.compile(r"^(?:[\u4e00-\u9fff\u00b7]{2,20}|[A-Za-z]{2,20})$")
 
 
+def _mask(phone: str) -> str:
+    """手机号脱敏：前 3 位 + **** + 后 4 位（⛔ 不回显完整号码）。"""
+    phone = phone or ""
+    if len(phone) < 7:
+        return "***"
+    return "%s****%s" % (phone[:3], phone[-4:])
+
+
 def success_text(name: str, phone: str) -> str:
     """成功回执（手机号脱敏：前 3 位 + **** + 后 4 位）。"""
-    masked = "%s****%s" % (phone[:3], phone[-4:])
-    return "✅ 您的实名信息已成功录入（姓名：%s，手机号：%s）。" % (name, masked)
+    return "✅ 您的实名信息已成功录入（姓名：%s，手机号：%s）。" % (
+        name, _mask(phone))
+
+
+def _registered_user(ctx: HandlerContext) -> Optional[dict]:
+    """人员目录里已有姓名 = 已实名过（实名登记写的就是 sys_user.name）。
+
+    ⚠️ 后端不可用时返回 None（⛔ 不拦）：宁可让用户重走一遍登记，
+    也不把正常登记路径堵死。
+    """
+    try:
+        user = ctx.backend.user_get(phone=ctx.phone).get("user")
+    except Exception:  # 后端不可达：不据此拦截
+        return None
+    if not user:
+        return None
+    if not (user.get("name") or "").strip():
+        return None
+    return user
 
 
 def parse_realname(text: str) -> Optional[tuple]:
@@ -91,7 +123,16 @@ def has_pending(ctx: HandlerContext) -> bool:
 
 
 def handle_command(parsed, ctx: HandlerContext) -> str:
-    """第 1 轮：挂 10 分钟会话 + 引导发送「姓名 手机号」。"""
+    """第 1 轮：挂 10 分钟会话 + 引导发送「姓名 手机号」。
+
+    ⭐ 2026-10-20 用户指令：已实名过的人再发「实名」-> 直接拦住并回显脱敏
+    信息（⛔ 不重复登记、⛔ 不重复写 upsert / 审计）。
+    """
+    existing = _registered_user(ctx)
+    if existing is not None:
+        return ALREADY_REGISTERED_TEXT.format(
+            name=existing["name"].strip(),
+            masked=_mask(existing.get("phone") or ctx.phone))
     ctx.state.put_pending_session(
         ctx.group_id, ctx.phone, BIZ, None, ctx.now,
         ttl_minutes=TTL_MINUTES, payload=_payload())

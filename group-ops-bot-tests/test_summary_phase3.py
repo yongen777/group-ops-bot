@@ -341,13 +341,13 @@ class TestSummaryMentionNotify:
             scope_key(GROUP, PHONE, "summary", "2026-10-13"))
 
     def test_overwrite_prompt_mentions_bot_name(self, tmp_db):
-        """拦截提示带机器人平台名（用户实测名 general-bot，2026-10-16）。"""
+        """拦截提示带机器人称呼（⭐ 2026-10-20 用户指令：统一用「机器人」）。"""
         backend = FakeBackend()
         enable_all(tmp_db)
         submit(tmp_db, backend, AM, "第一版")
         reply = submit(tmp_db, backend, AM, "第二版")
         assert reply == ("⚠️ 您在今天内已提交过总结。如需覆盖更新，"
-                         "请回复：@general-bot 确认覆盖")
+                         "请回复：@机器人 确认覆盖")
 
     def test_cancel_after_ttl_reports_expired(self, tmp_db):
         """取消遇超时（覆盖确认流边界）：会话已失效 -> 超时话术，⛔ 不静默。"""

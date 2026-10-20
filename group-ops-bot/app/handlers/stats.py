@@ -23,9 +23,9 @@
 
 from __future__ import annotations
 
+import csv
 import io
 import logging
-import re
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -47,7 +47,20 @@ QUERY_FAILED_TEXT = "统计查询失败（结果未知），请稍后重试"
 # 发送失败：⛔ 不粘贴服务器路径（内部信息不该出现在群里），路径只进日志
 EXPORT_SEND_FAILED_TEXT = ("统计表已生成，但本次发送到群聊失败，请稍后重试；"
                            "仍失败请到管理后台「统计中心」下载导出。")
-EXPORT_SENT_TEXT = "统计表已发送到本群：{name}（全员可直接下载）"
+# ⭐ 2026-10-20 用户指令：群内回执统一为「@所有人」文本 + 固定文案
+EXPORT_SENT_TEXT = ("@所有人 📊 最新群业务统计表已生成，文件已发送至群聊"
+                    "（包含打卡、总结、报数数据），请全体成员查阅。")
+# 群内文件名：业务名称英文 + 时间（⭐ 2026-10-20 用户指令，⛔ 不再用群号命名）
+FILE_STEM = "checkin_summary_report_%s"
+# 单一宽表 CSV 的表头（后台导出也是 CSV，两边口径一致）
+CSV_HEADER = ["业务", "手机号", "姓名", "周期", "时段/角色/类型",
+              "时间", "状态", "录入来源", "数据"]
+# 中文标签与后台导出（app/admin/stats_export.py）**同值**：
+# 群成员收到的文件与管理员下载的文件必须能互相对上，
+# ⛔ 改一处必须同步另一处（test_stats_phase6 有断言锁相等）。
+SESSION_LABEL = {"am": "上午", "pm": "下午"}
+STATUS_LABEL = {"NORMAL": "按时", "LATE": "迟到", "ADMIN_EDIT": "后台补录"}
+SOURCE_LABEL = {"user": "群员", "admin": "管理员"}
 
 
 def handle_command(parsed, ctx: HandlerContext) -> str:
@@ -70,34 +83,42 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
             return QUERY_FAILED_TEXT
         periods[biz] = period_k
 
-    workbook = build_all_export_workbook(records, periods, summary_ptype)
     out_dir = Path(ctx.config.data_dir) / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
-    safe_group = re.sub(r"[^0-9A-Za-z_-]", "_", ctx.group_id)[:40]
-    path = out_dir / ("export_all_%s_%s.xlsx"
-                      % (safe_group,
-                         period_mod.daily_key(ctx.now).replace("-", "")))
-    with open(path, "wb") as fh:
-        fh.write(workbook)
+    stem = FILE_STEM % ctx.now.strftime("%Y%m%d_%H%M")
+    sender = getattr(ctx.sender, "send_file", None)
 
-    # 阶段八 / 2026-10-20：文件发送走平台适配器（上传取 fileId -> file 消息）
-    file_sender = getattr(ctx.sender, "send_file", None)
-    if file_sender is not None:
-        try:
-            sent, reason = file_sender(ctx.group_id, path,
-                                       filename=path.name)
-        except Exception as exc:  # 适配器异常不当已发送
-            sent, reason = False, "file send error: %s" % exc
-        if sent:
-            return EXPORT_SENT_TEXT.format(name=path.name)
-        # 原因只进日志（含服务器路径属内部信息，⛔ 不进群聊话术）
-        LOG.warning("export file send failed: group=%s name=%s path=%s "
-                    "reason=%s", ctx.group_id, path.name, path, reason)
-        return EXPORT_SEND_FAILED_TEXT
-    # 无适配器注入（旧测试/裸调用）：与发送失败同口径
-    LOG.warning("export file send skipped: no sender.send_file injected "
-                "group=%s path=%s", ctx.group_id, path)
+    # ⭐ 2026-10-20 用户指令：**优先 CSV**（与后台导出口径一致）；
+    # CSV 发不出去才回落 xlsx（三 sheet 全量版）。⛔ 两种都失败才如实报失败。
+    csv_path = out_dir / (stem + ".csv")
+    csv_path.write_bytes(build_all_export_csv(records, periods))
+    if _try_send_file(sender, ctx.group_id, csv_path):
+        return EXPORT_SENT_TEXT
+
+    xlsx_path = out_dir / (stem + ".xlsx")
+    xlsx_path.write_bytes(
+        build_all_export_workbook(records, periods, summary_ptype))
+    if _try_send_file(sender, ctx.group_id, xlsx_path):
+        return EXPORT_SENT_TEXT
     return EXPORT_SEND_FAILED_TEXT
+
+
+def _try_send_file(sender, group_id: str, path: Path) -> bool:
+    """把文件发到群里；失败只记日志（含服务器路径），⛔ 不进群聊话术。"""
+    if sender is None:
+        # 无适配器注入（旧测试/裸调用）：与发送失败同口径
+        LOG.warning("export file send skipped: no sender.send_file injected "
+                    "group=%s path=%s", group_id, path)
+        return False
+    try:
+        sent, reason = sender(group_id, path, filename=path.name)
+    except Exception as exc:  # 适配器异常不当已发送
+        sent, reason = False, "file send error: %s" % exc
+    if sent:
+        return True
+    LOG.warning("export file send failed: group=%s name=%s path=%s "
+                "reason=%s", group_id, path.name, path, reason)
+    return False
 
 
 def _period_for(biz: str, summary_ptype, now) -> str:
@@ -114,6 +135,74 @@ def _query_records(ctx: HandlerContext, biz: str, period_k: str) -> list:
              "report": ctx.backend.report_query_records}[biz]
     return query(group_id=ctx.group_id,
                  period_key=period_k).get("records", [])
+
+
+def build_all_export_csv(records: dict, periods: dict) -> bytes:
+    """一键导出的 CSV：**单一宽表**，三业务各成若干行（用「业务」列区分）。
+
+    ⭐ 2026-10-20 用户指令：群内导出与后台导出口径统一 —— **优先 CSV**。
+    ⛔ 不用 xlsx 多 sheet 的唯一原因：群里的在线预览只显示第一张表，
+    用户会以为「只有打卡的信息」；单表 CSV 不会再有这个歧义。
+    """
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer)
+    writer.writerow(CSV_HEADER)
+    for biz in commands.EXPORT_ALL_BIZS:
+        period_k = periods.get(biz) or ""
+        for rec in records.get(biz) or []:
+            writer.writerow(_csv_row(biz, period_k, rec))
+    # utf-8-sig：Excel 双击打开不乱码（⛔ 不能只写 utf-8）
+    return buffer.getvalue().encode("utf-8-sig")
+
+
+def _csv_row(biz: str, period_k: str, rec: dict) -> list:
+    """一条业务记录 -> CSV 行（列序与 CSV_HEADER 严格对齐）。"""
+    phone = rec.get("phone") or ""
+    name = rec.get("name") or ""
+    status = STATUS_LABEL.get(rec.get("status"), rec.get("status") or "")
+    source = SOURCE_LABEL.get(rec.get("entry_source"),
+                              rec.get("entry_source") or "")
+    if biz == "checkin":
+        session = rec.get("session") or ""
+        return ["打卡", phone, name, rec.get("period_key") or period_k,
+                SESSION_LABEL.get(session, session),
+                _fmt_time(rec.get("checkin_time")), status,
+                source, rec.get("image_name") or ""]
+    if biz == "summary":
+        # 总结正文可能多行：CSV 里压成一行（⛔ 不把换行带进单元格，
+        # 否则在线预览会把一条记录拆成视觉上的多行）
+        content = (rec.get("content") or "").replace("\r\n", " ") \
+                                           .replace("\n", " ").replace("\r", " ")
+        return ["总结", phone, name, rec.get("period_key") or period_k,
+                rec.get("period_type") or "",
+                _fmt_time(rec.get("updated_time")), "", source, content]
+    items = []
+    for item in rec.get("items") or []:
+        label = item.get("field_name") or ("字段%s" % item.get("field_id"))
+        unit = item.get("unit")
+        qty = _fmt_qty(item.get("quantity"))
+        items.append("%s（%s）=%s" % (label, unit, qty) if unit
+                     else "%s=%s" % (label, qty))
+    return ["报数", phone, name, rec.get("period_key") or period_k,
+            rec.get("role") or "", _fmt_time(rec.get("created_time")),
+            "", source, "；".join(items)]
+
+
+def _fmt_time(value) -> str:
+    """时间原样展示成人能读的形态：2026-10-20T09:39:58.879 -> 2026-10-20 09:39:58。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.replace("T", " ").split(".")[0]
+
+
+def _fmt_qty(value) -> str:
+    """数量原样输出：5.0 -> 5，2.5 -> 2.5（⛔ 不丢小数、⛔ 不自己四舍五入）。"""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return "" if value is None else str(value)
+    return ("%d" % int(num)) if float(num).is_integer() else ("%g" % num)
 
 
 def build_all_export_workbook(records: dict, periods: dict,

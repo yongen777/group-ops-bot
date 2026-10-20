@@ -152,6 +152,9 @@ class FakeBackend:
     def user_get(self, *, phone):
         self._record("user_get", {"phone": phone})
         self._maybe_raise("user_get")
+        # 可脚本化：实名登记会先查目录里有没有姓名（已有 = 已实名过）
+        if "user_get" in self.results:
+            return self.results["user_get"]
         return {"user": {"id": 7, "phone": phone, "name": "测试用户"}}
 
     def checkin_submit(self, *, user_id, group_id, period_key, session,

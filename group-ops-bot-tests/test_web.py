@@ -58,7 +58,8 @@ class TestCallback:
         assert resp.json()["replied"] is True
         assert len(sender.sent) == 1
         assert "本群尚未接入机器人" in sender.sent[0]["text"]
-        assert "「@general-bot 绑定」" in sender.sent[0]["text"]
+        assert "「@机器人 绑定」" in sender.sent[0]["text"]
+        assert "general-bot" not in sender.sent[0]["text"]
         # 回推真实 @ 发送者（⛔ 不靠正文假装 @）
         assert sender.sent[0]["mention_phones"] == [PHONE]
         events = tmp_db._conn.execute(

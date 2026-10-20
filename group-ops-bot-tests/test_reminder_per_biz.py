@@ -168,7 +168,7 @@ class TestPerBizIndependent:
         assert summary["sent"] > 0
         # ⭐ 2026-10-16 用户指令三：新文案为分段结构，自定义文本作为**首行**
         assert pushed and all(t.startswith("早课记得打卡") for t in pushed)
-        assert all("🔔 【打卡】未完成提醒" in t for t in pushed)
+        assert all("🔔 【打卡·上午】未完成提醒" in t for t in pushed)
         assert any(PHONE[-4:] in t for t in pushed)  # 拼接未完成名单
 
     def test_summary_reminder_matches_checkin_format(self, tmp_db):
@@ -193,7 +193,7 @@ class TestPerBizIndependent:
         assert "📋 待提交名单：" in text
         assert "@" in text                     # 未完成名单（展示文本）
         assert "⏰ 截止时间：今晚 24:00" in text
-        assert "👉 快速处理：请发送「@general-bot 总结」完成提交。" in text
+        assert "👉 快速处理：请发送「@机器人 总结」完成提交。" in text
 
     def test_checkin_sessions_follow_configured_slots(self, tmp_db):
         """多时间段后：按群配置区间判定应完成（自定义单区间 06:00~08:30）。

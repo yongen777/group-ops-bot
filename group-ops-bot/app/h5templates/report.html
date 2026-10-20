@@ -96,7 +96,8 @@
   }
 
   var fields = [];        // 字段池（info 返回，全局共享）
-  var rows = [];          // 已添加的行 { select, qty }
+  var rows = [];          // 已添加的行 { id, fieldId, qty }（唯一真源）
+  var seq = 0;            // 行 id 自增（⛔ 不用数组下标，删行后下标会串）
   var verifyTail = "";    // 本人手机号后 4 位（身份绑定，服务端强制校验）
   var verified = false;
 
@@ -110,75 +111,101 @@
 
   function refreshSelects() {
     // 防重复：已被其他行选中的字段，在本行下拉里置灰（服务端仍会兜底拒绝）
-    rows.forEach(function (row) {
-      var chosen = row.select.value;
-      Array.prototype.forEach.call(row.select.options, function (opt) {
+    var sels = $("fields").querySelectorAll("select");
+    Array.prototype.forEach.call(sels, function (select) {
+      var chosen = select.value;
+      var taken = [];
+      Array.prototype.forEach.call(sels, function (other) {
+        if (other !== select && other.value) { taken.push(other.value); }
+      });
+      Array.prototype.forEach.call(select.options, function (opt) {
         opt.disabled = opt.value !== "" && opt.value !== chosen &&
-          rows.some(function (other) {
-            return other !== row && other.select.value === opt.value;
-          });
+          taken.indexOf(opt.value) >= 0;
       });
     });
   }
 
   function refreshSubmitState() {
     var valid = rows.length > 0 && rows.every(function (row) {
-      return row.select.value !== "" && /^\d+$/.test(row.qty.value.trim());
+      return row.fieldId !== "" && /^\d+$/.test(String(row.qty).trim());
     });
     $("submitBtn").disabled = !valid || !verified;
   }
 
-  function removeRow(row) {
-    var i = rows.indexOf(row);
-    if (i >= 0) { rows.splice(i, 1); }
-    row.select.parentNode.removeChild(row.select.parentNode);
-    if (!rows.length) { showEmptyHint(); }
+  // ⭐ 2026-10-20 修复（用户报障：点删除不立即消失 / 点添加反而少一行）：
+  // 旧实现把 DOM 节点和 rows 数组各改一半再互相 refresh，一旦某步抛错或
+  // 顺序错位，两组状态就永久不一致 —— 于是「删了还在」「加了像删了」。
+  // 现在改成**单一真源 + 整表重绘**：rows 是唯一状态，任何增删都 render()。
+  function render() {
+    var box = $("fields");
+    if (!rows.length) { showEmptyHint(); refreshSubmitState(); return; }
+    box.innerHTML = "";
+    rows.forEach(function (row) {
+      var rowEl = document.createElement("div");
+      rowEl.className = "row";
+
+      var select = document.createElement("select");
+      var placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "请选择字段";
+      select.appendChild(placeholder);
+      fields.forEach(function (f) {
+        var opt = document.createElement("option");
+        opt.value = String(f.field_id);
+        opt.textContent = fieldLabel(f);
+        select.appendChild(opt);
+      });
+      select.value = row.fieldId;
+
+      var qty = document.createElement("input");
+      qty.type = "number";
+      qty.className = "qty";
+      qty.min = "0";
+      qty.step = "1";
+      qty.inputMode = "numeric";
+      qty.placeholder = "数量";
+      qty.value = row.qty;
+
+      var del = document.createElement("button");
+      del.type = "button";
+      del.className = "del";
+      del.title = "删除本行";
+      del.textContent = "×";
+      del.setAttribute("data-del", String(row.id));
+
+      select.addEventListener("change", function () {
+        row.fieldId = select.value;
+        refreshSelects();
+        refreshSubmitState();
+      });
+      qty.addEventListener("input", function () {
+        row.qty = qty.value;
+        refreshSubmitState();
+      });
+
+      rowEl.appendChild(select);
+      rowEl.appendChild(qty);
+      rowEl.appendChild(del);
+      box.appendChild(rowEl);
+    });
     refreshSelects();
     refreshSubmitState();
   }
 
+  function removeRow(id) {
+    var next = [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].id !== id) { next.push(rows[i]); }
+    }
+    if (next.length === rows.length) { return; }   // 找不到 = 已删过，幂等
+    rows = next;
+    render();   // 立即重绘：点哪行删哪行，⛔ 不等到下一次操作才生效
+  }
+
   function addRow() {
     if (rows.length >= 50) { say("一次最多添加 50 个字段。", "warn"); return; }
-    if (!rows.length) { $("fields").innerHTML = ""; }
-    var rowEl = document.createElement("div");
-    rowEl.className = "row";
-    var select = document.createElement("select");
-    var placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "请选择字段";
-    select.appendChild(placeholder);
-    fields.forEach(function (f) {
-      var opt = document.createElement("option");
-      opt.value = String(f.field_id);
-      opt.textContent = fieldLabel(f);
-      select.appendChild(opt);
-    });
-    var qty = document.createElement("input");
-    qty.type = "number";
-    qty.className = "qty";
-    qty.min = "0";
-    qty.step = "1";
-    qty.inputMode = "numeric";
-    qty.placeholder = "数量";
-    var del = document.createElement("button");
-    del.type = "button";
-    del.className = "del";
-    del.title = "删除本行";
-    del.textContent = "×";
-    var row = { select: select, qty: qty };
-    del.addEventListener("click", function () { removeRow(row); });
-    select.addEventListener("change", function () {
-      refreshSelects();
-      refreshSubmitState();
-    });
-    qty.addEventListener("input", refreshSubmitState);
-    rowEl.appendChild(select);
-    rowEl.appendChild(qty);
-    rowEl.appendChild(del);
-    $("fields").appendChild(rowEl);
-    rows.push(row);
-    refreshSelects();
-    refreshSubmitState();
+    rows.push({ id: ++seq, fieldId: "", qty: "" });
+    render();
   }
 
   if (!token) {
@@ -234,21 +261,35 @@
 
   $("addBtn").addEventListener("click", addRow);
 
+  // 删除走**事件委托**（⭐ 2026-10-20）：监听器挂在容器上，不随重绘丢失；
+  // 认 data-del 行 id 删除，⛔ 不再依赖闭包里那条可能已经失效的 DOM 引用。
+  $("fields").addEventListener("click", function (ev) {
+    var node = ev.target;
+    while (node && node !== this) {
+      if (node.getAttribute && node.getAttribute("data-del")) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        removeRow(parseInt(node.getAttribute("data-del"), 10));
+        return;
+      }
+      node = node.parentNode;
+    }
+  });
+
   $("submitBtn").addEventListener("click", function () {
     var items = [];
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
-      var label = row.select.options[row.select.selectedIndex].text;
-      if (!row.select.value) {
-        say("还有一行未选择字段，请选择或删除该行。", "warn");
+      if (!row.fieldId) {
+        say("第 " + (i + 1) + " 行还没选择字段，请选择或删除该行。", "warn");
         return;
       }
-      var raw = row.qty.value.trim();
+      var raw = String(row.qty).trim();
       if (!/^\d+$/.test(raw)) {
-        say("数量必须是不小于 0 的整数，请检查「" + label + "」。", "warn");
+        say("数量必须是不小于 0 的整数，请检查第 " + (i + 1) + " 行。", "warn");
         return;
       }
-      items.push({ field_id: parseInt(row.select.value, 10),
+      items.push({ field_id: parseInt(row.fieldId, 10),
                    quantity: parseInt(raw, 10) });
     }
     if (!items.length) { say("请至少添加一个要报的字段。", "warn"); return; }

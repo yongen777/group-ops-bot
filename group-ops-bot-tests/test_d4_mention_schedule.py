@@ -203,7 +203,9 @@ class TestReminderTargets:
         # 文案内仍保留未完成者名单（用户「保留一个就行了」的那一个），
         # 且只含未完成者（PHONE 已完成 -> 不出现在名单里）
         assert OTHER_PHONE[-4:] in captured["text"]
-        assert "(上午)" in captured["text"]
+        # ⭐ 2026-10-20：名单里 ⛔ 不再带「(上午)」，时段写进标题
+        assert "【打卡·上午】" in captured["text"]
+        assert "(上午)" not in captured["text"]
         assert PHONE[-4:] not in captured["text"]
 
     def test_single_merged_message_not_one_per_target(self, tmp_db):
@@ -236,9 +238,10 @@ class TestReminderTargets:
                               datetime(2026, 10, 16, 0, 1, tzinfo=TZ))
         assert pushed
         body = pushed[0]
-        assert "【打卡】未完成提醒" in body
+        assert "【打卡·上午】未完成提醒" in body
         assert "⏰ 截止时间：" in body
-        assert "（上午）" in body or "时段已结束" in body
+        # 只催当时那一个时段 -> 截止时间只写时刻（时段名在标题里）
+        assert "⏰ 截止时间：12:00" in body
 
 
 def _ctx(store, backend, now):

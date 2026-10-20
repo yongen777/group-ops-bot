@@ -15,7 +15,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Calendar,
 } from 'lucide-react';
 import { api, gid } from '../../lib/api';
 import { useApp } from '../../lib/store';
@@ -558,7 +557,6 @@ export const Dashboard: React.FC = () => {
           {/* ⭐ 日期选择：默认今天，可回看历史并直接补录（⛔ 不允许未来） */}
           <div className="flex flex-wrap items-center gap-1.5">
             <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5">
-              <Calendar className="w-3.5 h-3.5 text-slate-400" />
               <span className="text-[11px] text-slate-400 font-medium">日期：</span>
               <input
                 type="date"

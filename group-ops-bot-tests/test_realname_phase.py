@@ -47,6 +47,17 @@ def pending_realname(tmp_db, group_id=GROUP, phone=PHONE, now=NOW):
     return tmp_db.get_pending_session(group_id, phone, "realname", now)
 
 
+def unregistered_backend():
+    """目录里没有这个人 = 还没实名过。
+
+    ⭐ 2026-10-20：已实名的人再发「实名」会被拦住，故登记类用例必须用
+    「目录无此人」的后端；已实名用例反过来用带 name 的默认后端。
+    """
+    backend = FakeBackend()
+    backend.results["user_get"] = {"user": None}
+    return backend
+
+
 class TestUnboundGuide:
     """未绑定群：任何非绑定流程的 @机器人 消息都回同一句引导。"""
 
@@ -60,7 +71,9 @@ class TestUnboundGuide:
             assert len(sender.sent) == 1
             body = sender.sent[0]["text"]
             assert "本群尚未接入机器人" in body
-            assert "「@general-bot 绑定」" in body
+            assert "「@机器人 绑定」" in body
+            # ⭐ 2026-10-20 用户指令：文案里 ⛔ 不再写死平台机器人名
+            assert "general-bot" not in body
             # 真实 @ 发送者，而不是正文冒充
             assert sender.sent[0]["mention_phones"] == [PHONE]
 
@@ -92,13 +105,16 @@ class TestUnboundGuide:
 class TestRealName:
     def test_round_one_creates_ten_minute_session(self, tmp_db):
         enable_all(tmp_db)
-        client, sender, _ = make_client(tmp_db)
+        client, sender, _ = make_client(tmp_db, backend=unregistered_backend())
         resp = client.post("/api/callback",
                            json=callback_payload("实名"))
         assert resp.json()["replied"] is True
         text = sender.sent[-1]["text"]
         assert "请发送您的「姓名 手机号」" in text
         assert "10 分钟内有效" in text
+        # ⭐ 2026-10-20 用户指令：示例统一写成「xx 手机号」（⛔ 拿真人当模板）
+        assert "例如：xx 手机号" in text
+        assert "郑佳 13800000000" not in text
         row = pending_realname(tmp_db)
         assert row is not None and row["biz"] == "realname"
         assert row["ttl_minutes"] == 10
@@ -107,7 +123,7 @@ class TestRealName:
         enable_all(tmp_db)
         tmp_db.upsert_member_task(GROUP, PHONE, nickname="旧名字",
                                   role="开发", enabled=True)
-        backend = FakeBackend()
+        backend = unregistered_backend()
         client, sender, _ = make_client(tmp_db, backend=backend)
         client.post("/api/callback", json=callback_payload("实名"))
         resp = client.post("/api/callback",
@@ -133,7 +149,7 @@ class TestRealName:
 
     def test_multiple_spaces_between_name_and_phone(self, tmp_db):
         enable_all(tmp_db)
-        backend = FakeBackend()
+        backend = unregistered_backend()
         client, _, _ = make_client(tmp_db, backend=backend)
         client.post("/api/callback", json=callback_payload("实名"))
         client.post("/api/callback",
@@ -142,7 +158,7 @@ class TestRealName:
 
     def test_invalid_phone_keeps_session(self, tmp_db):
         enable_all(tmp_db)
-        backend = FakeBackend()
+        backend = unregistered_backend()
         client, sender, _ = make_client(tmp_db, backend=backend)
         client.post("/api/callback", json=callback_payload("实名"))
         resp = client.post("/api/callback",
@@ -154,7 +170,7 @@ class TestRealName:
 
     def test_cancel_clears_session(self, tmp_db):
         enable_all(tmp_db)
-        client, sender, _ = make_client(tmp_db)
+        client, sender, _ = make_client(tmp_db, backend=unregistered_backend())
         client.post("/api/callback", json=callback_payload("实名"))
         resp = client.post("/api/callback", json=callback_payload("取消"))
         assert resp.json()["replied"] is True
@@ -163,7 +179,7 @@ class TestRealName:
 
     def test_expired_session_replies_timeout(self, tmp_db):
         enable_all(tmp_db)
-        backend = FakeBackend()
+        backend = unregistered_backend()
         client, sender, clock = make_client(tmp_db, backend=backend)
         client.post("/api/callback", json=callback_payload("实名"))
         clock["now"] = NOW + timedelta(minutes=11)
@@ -183,7 +199,7 @@ class TestPausedMember:
         enable_all(tmp_db)
         tmp_db.upsert_member_task(GROUP, PHONE, nickname="张三",
                                   role="开发", enabled=False)
-        backend = FakeBackend()
+        backend = unregistered_backend()
         client, sender, _ = make_client(tmp_db, backend=backend)
         for text in ("打卡", "总结", "报数"):
             sender.sent.clear()
@@ -197,10 +213,26 @@ class TestPausedMember:
         enable_all(tmp_db)
         tmp_db.upsert_member_task(GROUP, PHONE, nickname="张三",
                                   role="开发", enabled=False)
-        client, sender, _ = make_client(tmp_db)
+        client, sender, _ = make_client(tmp_db, backend=unregistered_backend())
         resp = client.post("/api/callback", json=callback_payload("实名"))
         assert resp.json()["replied"] is True
         assert "请发送您的「姓名 手机号」" in sender.sent[-1]["text"]
+
+    def test_already_registered_gets_blocked(self, tmp_db):
+        """⭐ 2026-10-20 用户指令：已实名过再发「实名」-> 拦住，⛔ 不重复登记。"""
+        enable_all(tmp_db)
+        backend = FakeBackend()          # 默认目录里已有姓名 = 已实名过
+        client, sender, _ = make_client(tmp_db, backend=backend)
+        resp = client.post("/api/callback", json=callback_payload("实名"))
+        assert resp.json()["replied"] is True
+        text = sender.sent[-1]["text"]
+        assert "已完成实名登记" in text
+        assert "测试用户" in text          # 回显已有姓名
+        assert "****" in text              # 手机号脱敏
+        assert PHONE not in text.replace("****", "")  # ⛔ 不回显完整号码
+        # ⛔ 不挂会话、不写库
+        assert pending_realname(tmp_db) is None
+        assert not [c for c in backend.calls if c[0] == "user_upsert"]
 
     def test_resume_restores_business(self, tmp_db):
         enable_all(tmp_db)

@@ -268,3 +268,40 @@ class TestRejectAudited:
     def test_expired_is_not_security_event(self):
         """过期是正常业务事件，⛔ 不当安全事件刷告警。"""
         assert RejectReason.EXPIRED not in tokens_mod.REJECT_SECURITY_EVENT
+
+
+class TestReportPageRowManagement:
+    """报数 H5 行增删（⭐ 2026-10-20 用户报障）。
+
+    线上现象：点「×」不立即消失；有时点「+ 添加报数字段」反而少了一行。
+    根因：旧实现把「DOM 节点」和「rows 数组」各改一半再互相 refresh，
+    两组状态一旦错位就永久不一致。
+
+    这里锁住页面结构口径（无 JS 测试运行环境，故按模板源码断言）：
+    1. ⛔ 不再出现「用闭包里的 select.parentNode 删 DOM」的旧写法；
+    2. 删除走事件委托（data-del 行 id）；
+    3. 状态只有 rows 一个真源，增删都走 render() 整表重绘。
+    """
+
+    def _page(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1] / "group-ops-bot"
+        return (root / "app" / "h5templates" / "report.html").read_text(
+            encoding="utf-8")
+
+    def test_no_legacy_dom_only_removal(self):
+        page = self._page()
+        assert "row.select.parentNode" not in page
+        assert "rows.indexOf(row)" not in page
+
+    def test_delete_uses_event_delegation(self):
+        page = self._page()
+        assert 'del.setAttribute("data-del"' in page
+        assert 'getAttribute("data-del")' in page
+
+    def test_rows_are_single_source_of_truth(self):
+        page = self._page()
+        assert "function render(" in page
+        assert "rows.push({ id: ++seq" in page    # 行有稳定 id（⛔ 不用下标）
+        # 增删都必须重绘，⛔ 不允许只改一半的局部更新
+        assert page.count("render();") >= 2

@@ -241,7 +241,7 @@ class TestNoRepeatWithinTriggerWindow:
                                   self._counting_push(pushes),
                                   day + timedelta(minutes=i))
         assert len(pushes) == 1
-        assert "(上午)" in pushes[0]
+        assert "【打卡·上午】" in pushes[0]
         rows = tmp_db._conn.execute(
             "SELECT * FROM reminder_plan WHERE session='am'").fetchall()
         assert rows and all(r["status"] == "sent" for r in rows)
@@ -275,7 +275,8 @@ class TestNoRepeatWithinTriggerWindow:
                                   self._counting_push(pushes),
                                   pm + timedelta(minutes=i))
         assert len(pushes) == 2
-        assert "(上午)" in pushes[0] and "(下午)" in pushes[1]
+        # ⭐ 2026-10-20：名单不再带「(上午)」，时段写进标题
+        assert "【打卡·上午】" in pushes[0] and "【打卡·下午】" in pushes[1]
 
 
 class TestCPendingExclusion:

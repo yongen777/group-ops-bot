@@ -14,7 +14,7 @@ from pathlib import Path
 
 from app import commands
 from app.handlers import stats as stats_handler
-from doubles.fakes import FakeBackend
+from doubles.fakes import FakeBackend, RecordingSender
 from helpers import GROUP, PHONE, TZ, enable_all, make_config, make_ctx
 
 AM = datetime(2026, 10, 13, 10, 0, tzinfo=TZ)
@@ -36,15 +36,20 @@ def _grant_all(tmp_db, phone=PHONE):
     tmp_db.upsert_whitelist(GROUP, phone)
 
 
-def _export_file(tmp_db):
-    """导出落盘位置。
-
-    ⭐ 2026-10-20：失败话术不再携带服务器绝对路径（内部信息不进群聊），
-    因此测试改为直接看数据目录的 exports/（文件仍照常生成）。
-    """
+def _export_files(tmp_db, suffix):
     exports = Path(str(tmp_db.db_path)).parent / "exports"
-    files = sorted(exports.glob("*.xlsx"))
-    assert files, "no export file written to %s" % exports
+    return sorted(exports.glob("*" + suffix))
+
+
+def _export_file(tmp_db):
+    """导出落盘位置（xlsx 回落版）。
+
+    ⭐ 2026-10-20：群内导出改成「先 CSV，发不出去才 xlsx」——
+    没有文件通道的用例里两版都会落盘，这里取 xlsx 校验三 sheet 口径。
+    """
+    files = _export_files(tmp_db, ".xlsx")
+    assert files, "no xlsx written to %s" % (
+        Path(str(tmp_db.db_path)).parent / "exports")
     return files[-1]
 
 
@@ -145,13 +150,14 @@ class TestExportFailureModes:
         assert not exports.exists() or not list(exports.glob("*.xlsx"))
 
     def test_export_writes_single_named_file(self, tmp_db):
+        """文件名 = 业务名称英文 + 时间（⭐ 2026-10-20 用户指令，⛔ 不再用群号）。"""
         enable_all(tmp_db)
         _grant_all(tmp_db)
         backend = FakeBackend()
         reply = _run(tmp_db, backend)
         path = _export_file(tmp_db)
         assert path.exists()
-        assert path.name == "export_all_G100_20261013.xlsx"
+        assert path.name == "checkin_summary_report_20261013_1000.xlsx"
 
     def test_workbook_has_three_sheets(self, tmp_db):
         from io import BytesIO
@@ -200,3 +206,93 @@ class TestExportFileSend:
         assert "发送到群聊失败" in reply
         assert "本地路径" not in reply
         assert "已发送" not in reply
+
+class TestExportCsvFirst:
+    """⭐ 2026-10-20 用户指令：群内导出**优先 CSV**，CSV 发不出去才回落 xlsx。
+
+    理由：后台导出本来就是 CSV，两处口径要一致；且 xlsx 多 sheet 在群里
+    在线预览只显示第一张表，用户会以为「只有打卡的信息」。
+    """
+
+    def _backend(self):
+        backend = FakeBackend()
+        backend.results["checkin_query_records"] = {"records": [
+            {"phone": PHONE, "name": "甲", "session": "am",
+             "checkin_time": "09:10:00", "status": "NORMAL",
+             "entry_source": "user", "image_name": "a.jpg"}]}
+        backend.results["summary_query_records"] = {"records": [
+            {"phone": PHONE, "name": "甲", "period_type": "daily",
+             "content": "第一行\n第二行", "updated_time": "20:00:00",
+             "entry_source": "user"}]}
+        backend.results["report_query_records"] = {"records": [
+            {"phone": PHONE, "name": "甲", "role": "开发",
+             "created_time": "20:01:00", "entry_source": "user",
+             "items": [{"field_id": 1, "field_name": "bug修复数",
+                        "quantity": 3.0, "unit": None}]}]}
+        return backend
+
+    def test_csv_holds_all_three_businesses(self, tmp_db):
+        enable_all(tmp_db)
+        _grant_all(tmp_db)
+        _run(tmp_db, self._backend())
+        files = _export_files(tmp_db, ".csv")
+        assert files, "no csv written"
+        assert files[-1].name == "checkin_summary_report_20261013_1000.csv"
+        text = files[-1].read_text(encoding="utf-8-sig")
+        assert text.startswith("业务,手机号,姓名,周期")
+        # 三业务同表（业务列区分）—— 这就是「表里只有打卡」的解药
+        assert "打卡,%s" % PHONE in text
+        assert "总结,%s" % PHONE in text
+        assert "报数,%s" % PHONE in text
+        assert "bug修复数=3" in text
+        # 总结正文的多行压成一行（⛔ 不把换行带进单元格）
+        assert "第一行 第二行" in text
+
+    def test_sends_csv_and_skips_xlsx(self, tmp_db):
+        enable_all(tmp_db)
+        _grant_all(tmp_db)
+        sender = RecordingSender()
+        sender.file_ok = True
+        ctx = ctx_at(tmp_db, self._backend())
+        ctx.sender = sender
+        reply = stats_handler.handle_command(commands.parse("导出"), ctx)
+        # ⭐ 回执 = @所有人 + 固定文案（用户指定）
+        assert reply.startswith("@所有人 📊 最新群业务统计表已生成")
+        assert "（包含打卡、总结、报数数据）" in reply
+        assert [f["filename"][-4:] for f in sender.files_sent] == [".csv"]
+        assert not _export_files(tmp_db, ".xlsx")   # CSV 成功 -> ⛔ 不再产 xlsx
+
+    def test_falls_back_to_xlsx_when_csv_rejected(self, tmp_db):
+        enable_all(tmp_db)
+        _grant_all(tmp_db)
+
+        class CsvRejecting(RecordingSender):
+            def send_file(self, group_id, path, filename=None):
+                if str(path).endswith(".csv"):
+                    return False, "platform rejects .csv"
+                return super(CsvRejecting, self).send_file(
+                    group_id, path, filename=filename)
+
+        sender = CsvRejecting()
+        sender.file_ok = True
+        ctx = ctx_at(tmp_db, self._backend())
+        ctx.sender = sender
+        reply = stats_handler.handle_command(commands.parse("导出"), ctx)
+        assert "已发送至群聊" in reply
+        assert [str(f["filename"]).endswith(".xlsx")
+                for f in sender.files_sent] == [True]
+        assert _export_files(tmp_db, ".xlsx")
+
+    def test_labels_and_time_format_match_admin_export(self):
+        """群内 CSV 的中文标签 / 时间形态与后台导出同口径。
+
+        标签表是两处各放一份（避免 handlers -> admin 的导入环），
+        这里用断言锁相等：⛔ 改一处漏另一处会当场红。
+        """
+        from app.admin import stats_export as admin_stats
+        assert stats_handler.SESSION_LABEL == admin_stats.SESSION_LABEL
+        assert stats_handler.STATUS_LABEL == admin_stats.STATUS_LABEL
+        assert stats_handler.SOURCE_LABEL == admin_stats.SOURCE_LABEL
+        assert stats_handler._fmt_time("2026-10-20T09:39:58.879000") == \
+            "2026-10-20 09:39:58"
+        assert stats_handler._fmt_time(None) == ""

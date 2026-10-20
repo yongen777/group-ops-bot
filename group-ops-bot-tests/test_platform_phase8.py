@@ -230,9 +230,13 @@ class TestExportSendSeam:
         sender.file_ok = True  # 模拟「实测接通后」
         ctx = ctx_with_sender(tmp_db, backend, sender)
         reply = self._export(tmp_db, backend, ctx)
-        assert "已发送到本群" in reply and "全员可直接下载" in reply
+        # ⭐ 2026-10-20 用户指令：回执统一成「@所有人 + 固定文案」
+        assert reply.startswith("@所有人 📊")
+        assert "已发送至群聊" in reply
         assert len(sender.files_sent) == 1
         assert sender.files_sent[0]["group_id"] == GROUP
+        # 优先 CSV（与后台导出口径一致）
+        assert sender.files_sent[0]["filename"].endswith(".csv")
 
     def test_adapter_failure_keeps_blocked_wording(self, tmp_db):
         backend = self._setup(tmp_db)
