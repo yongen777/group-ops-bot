@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -78,10 +77,9 @@ class TestUnboundGuide:
             assert sender.sent[0]["mention_phones"] == [PHONE]
 
     def test_bind_command_from_admin_enters_round_one(self, tmp_db):
-        """白名单管理员发「绑定」-> 正常进第一轮（⛔ 不被未绑定提示拦）。"""
+        """D29：任何成员发「绑定」都进第一轮（⛔ 不被未绑定提示拦）。"""
         sender = RecordingSender()
         config = make_config(Path(tmp_db.db_path).parent)
-        config = dataclasses.replace(config, bind_admin_phones=(PHONE,))
         app = create_app(state=tmp_db, backend=FakeBackend(), sender=sender,
                          config=config, now_fn=lambda: NOW)
         client = TestClient(app)
@@ -95,9 +93,8 @@ class TestUnboundGuide:
     def test_bind_command_from_any_member_allowed(self, tmp_db):
         """⭐ 2026-10-20 用户指令：不在任何名单里的群成员也能触发绑定。
 
-        原口径是「手机号必须在 GOPS_BIND_ADMIN_PHONES」，用户实测发现
-        「群成员还没被授权成管理员，郑佳也能绑定」并确认这才是期望语义 →
-        改为全体群成员可绑定，且 ⛔ 不落成未绑定提示。
+        D29：不存在任何名单 —— 原 GOPS_BIND_ADMIN_PHONES 已随配置字段一起删除，
+        权限只能由后台「授权管理员」定义；绑定本身不授予权限。
         """
         client, sender, _ = make_client(tmp_db)
         client.post("/api/callback", json=callback_payload("绑定", UNBOUND))

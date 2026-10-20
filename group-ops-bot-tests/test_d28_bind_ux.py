@@ -44,13 +44,13 @@ def _ctx(store, backend, phone=OTHER_PHONE, text="绑定"):
 
 
 def _config(data_dir):
-    """⚠️ 故意留空 bind_admin_phones：证明「未配名单」也不再挡住绑定。"""
+    """D29：BotConfig 已无 bind_admin_phones —— 绑定不需要任何名单。"""
     from app.config import BotConfig
     return BotConfig(
         callback_port=18002, admin_port=18003,
         external_base_url="http://127.0.0.1:18002",
         tz_name="Asia/Shanghai", data_dir=str(data_dir),
-        daily_cutoff=(19, 0), mcp=None, bind_admin_phones=())
+        daily_cutoff=(19, 0), mcp=None)
 
 
 # ---------- 问题 1：群名录进去了，后台要显示出来 ----------

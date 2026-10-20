@@ -21,7 +21,7 @@
 - [ ] 服务器双服务 active：`systemctl status group-ops-mcp group-ops-bot`（预期 NRestarts=0）
 - [ ] `GOPS_ENABLE_SCHEDULER=0`（push 能力未确认前⛔ 不得置 1）
 - [ ] 管理后台可访问（SSH 隧道 → `127.0.0.1:18003`），管理员账号已改过初密
-- [ ] `GOPS_BIND_ADMIN_PHONES` 已填测试群管理员手机号（空 = 群内绑定全员不可用，fail-closed）
+- [ ] ~~`GOPS_BIND_ADMIN_PHONES` 已填测试群管理员手机号~~ —— **已废弃（2026-10-20 D29）**：群内「绑定」对全体群成员开放，该 env 已从代码与线上删除
 - [ ] DDL 已批准并执行（六表在 MySQL qsm 库）——⛔ 未批准则提交全部归 C 类，演练只做到「命令可达 + 拒绝话术正确」
 
 ## 1. 演练步骤

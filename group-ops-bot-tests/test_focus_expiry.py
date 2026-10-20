@@ -37,15 +37,14 @@ NOW = datetime(2026, 10, 13, 10, 0, tzinfo=TZ)
 AM = NOW
 
 
-def _config(data_dir, ttl=30, bind_admins=(ADMIN_PHONE,)) -> BotConfig:
+def _config(data_dir, ttl=30) -> BotConfig:
     """带可调焦点 TTL 的配置（⛔ 不改 helpers.make_config 的签名）。"""
     return BotConfig(
         callback_port=18002, admin_port=18003,
         external_base_url="http://127.0.0.1:18002",
         tz_name="Asia/Shanghai", data_dir=str(data_dir),
         daily_cutoff=(19, 0), mcp=None,
-        pending_ttl_minutes=ttl,
-        bind_admin_phones=bind_admins)
+        pending_ttl_minutes=ttl)
 
 
 def _ctx(tmp_db, backend, now, text="", phone=ADMIN_PHONE,

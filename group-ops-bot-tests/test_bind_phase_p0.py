@@ -2,7 +2,7 @@
 """P0 群绑定测试（用户指令验收项 1：进群 -> 管理员「绑定」-> 真实 group_id 建配置）。
 
 覆盖：
-- 群内「绑定」命令：授权（GOPS_BIND_ADMIN_PHONES）/ 未授权留痕 / 幂等 /
+- 群内「绑定」命令：全体成员可触发（D29：已无任何 env 权限名单）/ 幂等 /
   停用群不借绑定暗中启用 / 空 group_id / 格式错误
 - fail-closed：绑定后五业务开关**全关**（⛔ 不替管理员决定开哪些业务）
 - 回调发现记账（group_seen）+ 后台「发现但未绑定」列表 + 一键绑定（双路径）
@@ -35,36 +35,34 @@ OTHER_GROUP = "G800"        # 始终未绑定的群（隔离对照）
 ADMIN_PHONE = PHONE         # 绑定管理员 = 测试用户手机号
 
 
-def bind_config(data_dir, bind_admins=(ADMIN_PHONE,)) -> BotConfig:
-    """带绑定管理员名单的配置（⛔ 不能改 helpers.make_config 的签名）。"""
+def bind_config(data_dir) -> BotConfig:
+    """绑定场景配置（⛔ 不含任何权限名单：D29 起 BotConfig 已无此字段）。"""
     return BotConfig(
         callback_port=18002, admin_port=18003,
         external_base_url="http://127.0.0.1:18002",
         tz_name="Asia/Shanghai", data_dir=str(data_dir),
-        daily_cutoff=(19, 0), mcp=None,
-        bind_admin_phones=bind_admins)
+        daily_cutoff=(19, 0), mcp=None)
 
 
 def ctx_at(tmp_db, backend, now=NOW, group_id=NEW_GROUP, phone=ADMIN_PHONE,
-           bind_admins=(ADMIN_PHONE,), text="绑定"):
+           text="绑定"):
     return make_ctx(tmp_db, backend,
-                    bind_config(Path(tmp_db.db_path).parent, bind_admins),
+                    bind_config(Path(tmp_db.db_path).parent),
                     now=now, group_id=group_id, phone=phone, text=text)
 
 
 def bind_via_chat(tmp_db, backend, group_id=NEW_GROUP, phone=ADMIN_PHONE,
-                  bind_admins=(ADMIN_PHONE,), group_name="新群"):
+                  group_name="新群"):
     """⭐ 两轮绑定（2026-10-16 用户指令三.4）：第 1 轮提示 -> 第 2 轮输群名。
 
     返回 (第一轮话术, 第二轮话术)。
     """
     first = bind_handler.handle_command(
         commands.parse("绑定"),
-        ctx_at(tmp_db, backend, group_id=group_id, phone=phone,
-               bind_admins=bind_admins))
+        ctx_at(tmp_db, backend, group_id=group_id, phone=phone))
     second = bind_handler.handle_pending_text_if_any(
         ctx_at(tmp_db, backend, group_id=group_id, phone=phone,
-               bind_admins=bind_admins, text=group_name))
+               text=group_name))
     return first, second
 
 
@@ -79,12 +77,11 @@ def switches_of(tmp_db, group_id):
     return tmp_db.normalized_switches(row)
 
 
-def make_callback_app(tmp_db, bind_admins=()):
+def make_callback_app(tmp_db):
     backend = FakeBackend()
     sender = RecordingSender()
     app = create_app(state=tmp_db, backend=backend, sender=sender,
-                     config=bind_config(Path(tmp_db.db_path).parent,
-                                        bind_admins),
+                     config=bind_config(Path(tmp_db.db_path).parent),
                      now_fn=lambda: NOW)
     return TestClient(app), sender
 
@@ -154,12 +151,11 @@ class TestBindCommand:
         assert row is not None and row["group_name"] == "非管理员绑的群"
         assert json.loads(row["bind_admins"]) == [OTHER_PHONE]
 
-    def test_bind_without_admin_list_still_allowed(self, tmp_db):
-        """未配 GOPS_BIND_ADMIN_PHONES 也照常可用（该配置已不参与判定）。"""
+    def test_bind_needs_no_env_whitelist(self, tmp_db):
+        """D29：配置里已无任何绑定名单，绑定照常进两轮（权限不从 env 来）。"""
         backend = FakeBackend()
         reply = bind_handler.handle_command(
-            commands.parse("绑定"),
-            ctx_at(tmp_db, backend, bind_admins=()))
+            commands.parse("绑定"), ctx_at(tmp_db, backend))
         assert "请输入要绑定的群名称" in reply
 
     def test_rebind_is_idempotent(self, tmp_db):
@@ -262,7 +258,7 @@ class TestDiscoveredAndBackendBind:
 
     def test_bind_command_via_callback_gets_reply(self, tmp_db):
         """回调收到「绑定」-> 优先于群授权处理：未授权也回话 + 进两轮（全员可绑）。"""
-        client, sender = make_callback_app(tmp_db, bind_admins=())
+        client, sender = make_callback_app(tmp_db)
         resp = client.post("/api/callback",
                            json=callback_payload("绑定", NEW_GROUP))
         assert resp.status_code == 200
@@ -274,8 +270,7 @@ class TestDiscoveredAndBackendBind:
 
     def test_bind_command_via_callback_authorized(self, tmp_db):
         """回调收到授权管理员的「绑定」-> 两轮：先提示，再输群名建配置。"""
-        client, sender = make_callback_app(tmp_db,
-                                           bind_admins=(ADMIN_PHONE,))
+        client, sender = make_callback_app(tmp_db)
         resp = client.post("/api/callback",
                            json=callback_payload("绑定", NEW_GROUP,
                                                  phone=ADMIN_PHONE))

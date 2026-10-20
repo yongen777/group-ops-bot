@@ -87,20 +87,18 @@ def _make_v5_db(path):
     conn.close()
 
 
-def _bind_config(data_dir, bind_admins=(ADMIN_PHONE,)) -> BotConfig:
+def _bind_config(data_dir) -> BotConfig:
     return BotConfig(
         callback_port=18002, admin_port=18003,
         external_base_url="http://127.0.0.1:18002",
         tz_name="Asia/Shanghai", data_dir=str(data_dir),
-        daily_cutoff=(19, 0), mcp=None,
-        bind_admin_phones=bind_admins)
+        daily_cutoff=(19, 0), mcp=None)
 
 
-def _callback_app(tmp_db, bind_admins=(ADMIN_PHONE,)):
+def _callback_app(tmp_db):
     sender = RecordingSender()
     app = create_app(state=tmp_db, backend=FakeBackend(), sender=sender,
-                     config=_bind_config(Path(tmp_db.db_path).parent,
-                                         bind_admins),
+                     config=_bind_config(Path(tmp_db.db_path).parent),
                      now_fn=lambda: NOW)
     return TestClient(app), sender
 

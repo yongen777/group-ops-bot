@@ -198,7 +198,7 @@ class TestRoundTwo:
         """
         backend = FakeBackend()
         first_round(tmp_db, backend)
-        reply = second_round(tmp_db, backend, "群C", bind_admins=())
+        reply = second_round(tmp_db, backend, "群C")
         assert "绑定成功" in reply
         assert tmp_db.get_group_config(NEW_GROUP) is not None
         assert tmp_db.get_pending_session(NEW_GROUP, ADMIN_PHONE,
@@ -242,12 +242,12 @@ class TestBindColonFormIsPlainText:
 
 class TestTwoRoundViaCallback:
     def _callback_app(self, tmp_db):
-        """带绑定管理员的回调 app（⛔ 测试专用，不进生产装配）。"""
+        """回调两轮用 app（D29：配置里已无任何权限名单）。"""
         backend = FakeBackend()
         sender = RecordingSender()
         app = create_app(
             state=tmp_db, backend=backend, sender=sender,
-            config=bind_config(Path(tmp_db.db_path).parent, (ADMIN_PHONE,)),
+            config=bind_config(Path(tmp_db.db_path).parent),
             now_fn=lambda: NOW)
         return TestClient(app), sender
 

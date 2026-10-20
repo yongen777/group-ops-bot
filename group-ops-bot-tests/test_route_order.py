@@ -34,12 +34,11 @@ UNBOUND = "G-ROUTE-UNBOUND"
 ADMIN_PHONE = PHONE
 
 
-def make_client(tmp_db, bind_admins=(ADMIN_PHONE,)):
+def make_client(tmp_db):
     backend = FakeBackend()
     sender = RecordingSender()
     app = create_app(state=tmp_db, backend=backend, sender=sender,
-                     config=bind_config(Path(tmp_db.db_path).parent,
-                                        bind_admins),
+                     config=bind_config(Path(tmp_db.db_path).parent),
                      now_fn=lambda: NOW)
     return TestClient(app), sender
 

@@ -22,11 +22,12 @@
 | `GOPS_DAILY_CUTOFF_HOUR` | ⬜ 可选 | `19` | 日报/报数默认截止小时（Q-BIZ5） | `app/config.py:82` |
 | `GOPS_DAILY_CUTOFF_MINUTE` | ⬜ 可选 | `0` | 日报/报数默认截止分钟 | `app/config.py:83` |
 | `GOPS_MCP_TIMEOUT` | ⬜ 可选 | `30` | MCP 调用超时（秒） | `app/config.py:98` |
-| `GOPS_BIND_ADMIN_PHONES` | ⬜ 可选 | 空 | 群内「绑定」命令管理员手机号（逗号分隔）。**空 = 群内绑定全员不可用**（fail-closed），只能经后台「发现但未绑定」列表绑定 | `app/config.py:86-87` |
 | `GOPS_ENABLE_SCHEDULER` | ⬜ 可选 | `1` | 提醒调度线程。MCP 未就绪期设 `0`（避免每分钟不可达日志） | `app/main.py:130` |
 | `GOPS_LOG_LEVEL` | ⬜ 可选 | `INFO` | 日志级别 | `app/main.py:112` |
 
 > 注：回调监听地址由 `BotConfig.callback_host` 固定 `0.0.0.0`（局域网紫玉直连需要，2026-10-13 确认），⛔ 不提供 env 缩小。
+
+> ⛔ **权限类配置一律不设 env**（2026-10-20 D29 用户指令）：群内「绑定」对**全体群成员**开放，原 `GOPS_BIND_ADMIN_PHONES` 已从代码与线上 env 删除；**群管理员**只能由后台「授权管理员」写入 `export_whitelist(ADMIN_ALL)`，**后台管理员**身份只存在 `admin_user` 表。`GOPS_ADMIN_USERNAME/PASSWORD` 仅用于「库里一个管理员都没有」的首次引导建号，之后一律忽略 —— 交接时在后台改账号名 + 改密码即可，⛔ 不需要动服务器变量。
 
 ## 二、MCP Server（`python -m mcp_server.server`，:18001 SSE）
 

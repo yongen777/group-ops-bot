@@ -57,9 +57,10 @@ class BotConfig:
     data_dir: str = "data"
     daily_cutoff: tuple = (19, 0)      # 日报/报数默认截止（Q-BIZ5 默认）
     pending_ttl_minutes: int = 30      # 两轮对话焦点 TTL（§2.2；2026-10-17 用户指令六）
-    # ⚠️ 历史字段（2026-10-20 起**不再参与判定**）：用户确认群内「绑定」对
-    # 本群全体成员开放，GOPS_BIND_ADMIN_PHONES 只作部署兼容保留。
-    bind_admin_phones: tuple = ()
+    # ⛔ 本类**不含任何权限名单**（2026-10-20 D29 用户指令）：
+    # 群管理员 = 后台「授权管理员」写入的 export_whitelist(ADMIN_ALL)，
+    # 后台管理员 = admin_user 表；两者都只能经后台操作定义，
+    # ⛔ 不允许通过环境变量 / 配置文件从旁路授予任何权限。
     mcp: McpServerConfig = field(default=None)  # type: ignore[assignment]
 
 
@@ -69,14 +70,13 @@ def load_bot_config() -> BotConfig:
     必需：GOPS_MCP_BASE_URL（MCP Server 地址）、GOPS_EXTERNAL_BASE_URL（H5 链接 base）。
     可选：GOPS_CALLBACK_PORT / GOPS_ADMIN_PORT / GOPS_ADMIN_HOST /
     GOPS_DATA_DIR / GOPS_DAILY_CUTOFF_HOUR / GOPS_DAILY_CUTOFF_MINUTE /
-    GOPS_MCP_TIMEOUT / GOPS_BIND_ADMIN_PHONES /
-    GOPS_PENDING_SESSION_TTL_MINUTES。
+    GOPS_MCP_TIMEOUT / GOPS_PENDING_SESSION_TTL_MINUTES。
     GOPS_PENDING_SESSION_TTL_MINUTES：两轮对话焦点 TTL（默认 30，
     2026-10-17 用户指令六；过期后明确提示重发命令，⛔ 不静默失效）。
     GOPS_ADMIN_HOST：管理后台监听地址（§2.10：仅内网 / VPN，⛔ 不公网暴露）。
     公网服务器上必须显式设 127.0.0.1（经 SSH 隧道访问），默认 0.0.0.0 仅限开发机。
-    GOPS_BIND_ADMIN_PHONES：群内「绑定」命令的管理员手机号（逗号分隔）。
-    空 = 群内绑定全员不可用（fail-closed），只能经管理后台绑定（P0 双路径）。
+    ⛔ 本函数**不读取任何权限名单**（2026-10-20 D29）：GOPS_BIND_ADMIN_PHONES
+    已彻底移除 —— 群绑定对全体成员开放，群管理员只能由后台授权。
     """
     mcp_base = _require("GOPS_MCP_BASE_URL")
     external_base = os.environ.get("GOPS_EXTERNAL_BASE_URL", "").strip()
@@ -94,8 +94,6 @@ def load_bot_config() -> BotConfig:
     pending_ttl = _int("GOPS_PENDING_SESSION_TTL_MINUTES", 30)
     if pending_ttl <= 0:
         raise ConfigError("invalid pending session ttl (must be > 0)")
-    bind_raw = os.environ.get("GOPS_BIND_ADMIN_PHONES", "").strip()
-    bind_phones = tuple(p.strip() for p in bind_raw.split(",") if p.strip())
     return BotConfig(
         callback_port=_int("GOPS_CALLBACK_PORT", 18002),
         admin_port=_int("GOPS_ADMIN_PORT", 18003),
@@ -104,7 +102,6 @@ def load_bot_config() -> BotConfig:
         data_dir=os.environ.get("GOPS_DATA_DIR", "data").strip() or "data",
         daily_cutoff=(cutoff_h, cutoff_m),
         pending_ttl_minutes=pending_ttl,
-        bind_admin_phones=bind_phones,
         mcp=McpServerConfig(
             base_url=mcp_base.rstrip("/"),
             timeout_seconds=_int("GOPS_MCP_TIMEOUT", 30),
