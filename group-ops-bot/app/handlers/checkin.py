@@ -52,11 +52,78 @@ BIZ = "checkin"
 # 产品默认时间段（后台可改）。区间 id 保持 am/pm：与历史额度键 / 既有数据兼容，
 # 12:00 分界与旧「12:00 前 am」口径一致（§2.3）。
 DEFAULT_CHECKIN_SLOTS = [
-    {"id": "am", "name": "上午", "start": "00:00", "end": "09:00"},
-    {"id": "pm", "name": "下午", "start": "12:00", "end": "14:50"},
+    {"id": "am", "name": "上午", "start": "00:00", "end": "09:00",
+     "remind_at": "08:55"},
+    {"id": "pm", "name": "下午", "start": "12:00", "end": "14:50",
+     "remind_at": "14:45"},
 ]
 MAX_SLOTS = 8
+# ⭐ 2026-10-20 用户方案：提醒时间点**按每个时段单独配置**，
+# 落在「开始之后、结束之前」的开区间内（8:00-8:30 -> 08:01~08:29）。
+# 未配置时的默认点 = 结束前 5 分钟（⛔ 不再等于开始时间）。
+REMIND_AT_BEFORE_END_MINUTES = 5
 _SLOT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
+
+
+def _minute_of(hhmm) -> Optional[int]:
+    """HH:MM -> 当天第几分钟；非法返回 None。"""
+    parsed = period_mod.parse_hhmm(hhmm) if isinstance(hhmm, str) else None
+    if parsed is None:
+        return None
+    return parsed[0] * 60 + parsed[1]
+
+
+def _fmt_minute(total: int) -> str:
+    total = max(0, min(23 * 60 + 59, total))
+    return "%02d:%02d" % (total // 60, total % 60)
+
+
+def default_remind_at(start: str, end: str) -> str:
+    """未配置提醒时间时的默认提醒点（⭐ 尽量靠近结束，且严格在区间内）。
+
+    - 区间 >= 6 分钟 -> 结束前 5 分钟（08:00-08:30 -> 08:25）
+    - 区间 2~5 分钟 -> 开始后 1 分钟（08:00-08:04 -> 08:01）
+    - 区间仅 1 分钟 -> 无法取中间时刻，退回开始时间（区间本身无可选点）
+    ⛔ 默认值也必须是合法时刻；调度侧只读 slot_remind_at，不再读 start。
+    """
+    s, e = _minute_of(start), _minute_of(end)
+    if s is None or e is None:
+        return start
+    if e - s >= REMIND_AT_BEFORE_END_MINUTES + 1:
+        return _fmt_minute(e - REMIND_AT_BEFORE_END_MINUTES)
+    if e - s >= 2:
+        return _fmt_minute(s + 1)
+    return start
+
+
+def remind_at_error(start: str, end: str, remind_at) -> Optional[str]:
+    """提醒时间点边界校验（单一真源，API 与前端提示同一口径）。
+
+    返回 None = 合法；否则返回管理员可读的原因。
+    规则（⭐ 2026-10-20 用户方案）：**开始时刻 < 提醒时刻 < 结束时刻**，
+    两端都取不到 —— 8:00-8:30 的时段只能填 08:01~08:29。
+    """
+    s, e, r = _minute_of(start), _minute_of(end), _minute_of(remind_at)
+    if s is None or e is None:
+        return "时间段本身不合法，无法校验提醒时间"
+    if r is None:
+        return "提醒时间必须是 HH:MM 格式"
+    if r <= s:
+        return ("提醒时间（%s）必须晚于时段开始（%s）至少 1 分钟"
+                % (remind_at, start))
+    if r >= e:
+        return ("提醒时间（%s）必须早于时段结束（%s）至少 1 分钟"
+                % (remind_at, end))
+    return None
+
+
+def slot_remind_at(slot: dict) -> str:
+    """该时段**实际生效**的提醒时刻（显式配置优先，否则默认值）。"""
+    raw = slot.get("remind_at")
+    if isinstance(raw, str) and remind_at_error(
+            slot.get("start"), slot.get("end"), raw) is None:
+        return raw
+    return default_remind_at(slot.get("start"), slot.get("end"))
 
 NOT_ENABLED_TEXT = "本群未开启打卡，请联系管理员"
 # 链接话术（用户指令 2026-10-16 二：带有效期提醒）。
@@ -124,8 +191,19 @@ def _normalize_slot(raw) -> Optional[dict]:
     end = period_mod.parse_hhmm(raw.get("end"))
     if start is None or end is None or start >= end:
         return None  # ⛔ 不做跨夜区间：start 必须早于 end
+    start_text = "%02d:%02d" % start
+    end_text = "%02d:%02d" % end
+    # ⭐ 2026-10-20：提醒时间点合法才保留；非法 / 缺失 -> 落默认值。
+    # ⛔ 不因一个坏提醒点丢弃整个时段（那会让该时段整天不提醒），
+    #    也 ⛔ 不让越界值进入调度（否则窗口永远不命中）。
+    raw_remind = raw.get("remind_at")
+    if (isinstance(raw_remind, str)
+            and remind_at_error(start_text, end_text, raw_remind) is None):
+        remind_at = raw_remind
+    else:
+        remind_at = default_remind_at(start_text, end_text)
     return {"id": slot_id, "name": (name or "").strip(),
-            "start": "%02d:%02d" % start, "end": "%02d:%02d" % end}
+            "start": start_text, "end": end_text, "remind_at": remind_at}
 
 
 def normalize_slots_config(raw) -> Optional[list]:
@@ -167,10 +245,12 @@ def normalize_slots_config(raw) -> Optional[list]:
         legacy[key] = "%02d:%02d" % parsed if parsed else default
     am_end = legacy["am"]
     pm_start = max("12:00", am_end)
-    result = [{"id": "am", "name": "上午", "start": "00:00", "end": am_end}]
+    result = [{"id": "am", "name": "上午", "start": "00:00", "end": am_end,
+               "remind_at": default_remind_at("00:00", am_end)}]
     if pm_start < legacy["pm"]:
         result.append({"id": "pm", "name": "下午",
-                       "start": pm_start, "end": legacy["pm"]})
+                       "start": pm_start, "end": legacy["pm"],
+                       "remind_at": default_remind_at(pm_start, legacy["pm"])})
     return result
 
 

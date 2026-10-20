@@ -193,7 +193,7 @@ class TestMigrationV7ToV8:
             assert rows[0]["updated_at"] == "2026-10-16 09:00:00+08:00"
             assert conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
-            ).fetchone()["value"] == "8"
+            ).fetchone()["value"] == "9"   # v8 之后还有 v9（reminder_plan.source）
             assert store.has_whitelist_permission(GROUP, PHONE) is True
         finally:
             store.close()
@@ -319,8 +319,9 @@ class TestMigrationV3ToV4:
             ).fetchone()["value"]
             # v4 -> v5（P0 群绑定 / pending_verify）、v5 -> v6（D3-B1 实例表）、
             # v6 -> v7（§4.11.4 D4 定夺：h5_upload 上传凭证表）、
-            # v7 -> v8（2026-10-19 白名单单权化）叠加在同一迁移链上
-            assert version == "8"
+            # v7 -> v8（2026-10-19 白名单单权化）、
+            # v8 -> v9（2026-10-20 reminder_plan.source）叠加在同一迁移链上
+            assert version == "9"
             tables = {r["name"] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             assert "group_member_task_config" in tables

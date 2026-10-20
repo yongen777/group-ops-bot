@@ -34,6 +34,29 @@ const BIZ_SWITCHES = [
   { key: 'statistics' as const, title: '数据导出', desc: '管理员下载报表清单' },
 ];
 
+/** HH:MM -> 当天分钟数（非法返回 null） */
+const toMin = (value?: string): number | null => {
+  if (!value || !/^\d{2}:\d{2}$/.test(value)) return null;
+  return Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
+};
+
+/**
+ * 提醒时间点边界校验（与后端 checkin.remind_at_error 同一口径）：
+ * 必须满足 start < remind_at < end —— 08:00-08:30 的时段只能填 08:01~08:29。
+ * 返回 null = 合法；留空（未配置）时后端按「结束前 5 分钟」补默认值。
+ */
+const remindAtProblem = (start: string, end: string, remindAt?: string): string | null => {
+  if (!remindAt) return null;
+  const s = toMin(start);
+  const e = toMin(end);
+  const r = toMin(remindAt);
+  if (r === null) return '提醒时间格式不正确';
+  if (s === null || e === null) return '时间段本身不合法';
+  if (r <= s) return `提醒时间必须晚于开始时间（需 > ${start}）`;
+  if (r >= e) return `提醒时间必须早于结束时间（需 < ${end}）`;
+  return null;
+};
+
 export const GroupManagement: React.FC = () => {
   const { groups, selectedGroupId, selectGroup, refreshGroups } = useApp();
   const [subView, setSubView] = useState<'config' | 'members' | 'admins' | 'fields'>('config');
@@ -169,6 +192,14 @@ export const GroupManagement: React.FC = () => {
       showToast('至少保留一个打卡时段', 'error');
       return;
     }
+    // ⭐ 2026-10-20：提醒时间点必须严格落在时段内（开区间），前端先挡一道
+    for (const slot of clean) {
+      const problem = remindAtProblem(slot.start, slot.end, slot.remind_at);
+      if (problem) {
+        showToast(`「${slot.name}」${problem}`, 'error');
+        return;
+      }
+    }
     const ordered = [...clean].sort((a, b) => a.start.localeCompare(b.start));
     const ok = await saveConfig({ checkin_deadlines: { slots: ordered } },
       '打卡时段已保存并即时生效');
@@ -186,8 +217,10 @@ export const GroupManagement: React.FC = () => {
       showToast('今日报数以整天为执行时间，必须设置每日提醒下发时间', 'error');
       return;
     }
+    // ⭐ 2026-10-20：打卡提醒时刻 = 各时段配置的提醒时间点（remind_at）；
+    // times 仅为兼容保留字段，实际触发由 remind_at 决定（⛔ 不再用 start）
     const checkinTimes = (slots.length ? slots : config?.checkin_slots || [])
-      .map((slot) => slot.start)
+      .map((slot) => slot.remind_at || slot.start)
       .slice(0, 6);
     const patch = {
       reminder_rules: {
@@ -641,6 +674,7 @@ export const GroupManagement: React.FC = () => {
                           name: `时段${prev.length + 1}`,
                           start: '18:00',
                           end: '19:00',
+                          remind_at: '18:55',
                         },
                       ];
                     });
@@ -674,7 +708,7 @@ export const GroupManagement: React.FC = () => {
                       />
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="text-slate-500 text-[11px]">有效打卡区间：</span>
                       <input
                         type="time"
@@ -695,6 +729,31 @@ export const GroupManagement: React.FC = () => {
                         }}
                         className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-mono text-xs"
                       />
+                      {/* ⭐ 2026-10-20 用户方案：提醒时间点（必须 start < remind_at < end）。
+                          留空 = 由后端按「结束前 5 分钟」补默认值。 */}
+                      <span className="w-px h-4 bg-slate-200 mx-0.5" />
+                      <span className="text-slate-500 text-[11px]">提醒时间：</span>
+                      <input
+                        type="time"
+                        value={slot.remind_at || ''}
+                        min={slot.start}
+                        max={slot.end}
+                        title="必须晚于开始、早于结束；留空 = 结束前 5 分钟"
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setSlots((prev) => prev.map((s) => (s.id === slot.id ? { ...s, remind_at: value } : s)));
+                        }}
+                        className={`bg-white border rounded-lg px-2 py-1 font-mono text-xs ${
+                          remindAtProblem(slot.start, slot.end, slot.remind_at)
+                            ? 'border-rose-400 text-rose-700 bg-rose-50'
+                            : 'border-slate-200'
+                        }`}
+                      />
+                      {remindAtProblem(slot.start, slot.end, slot.remind_at) && (
+                        <span className="text-rose-600 text-[10px] font-medium">
+                          {remindAtProblem(slot.start, slot.end, slot.remind_at)}
+                        </span>
+                      )}
                       <button
                         onClick={() => {
                           if (slots.length <= 1) {
@@ -835,7 +894,7 @@ export const GroupManagement: React.FC = () => {
                   <div className="p-3 rounded-xl bg-blue-50/80 border border-blue-200 text-xs text-blue-950 space-y-2">
                     <div className="font-bold flex items-center gap-1.5 text-blue-900">
                       <Clock className="w-3.5 h-3.5 text-blue-600" />
-                      <span>提醒时间固定为打卡起始时间</span>
+                      <span>按各时段的「提醒时间点」下发</span>
                     </div>
                     <div className="space-y-1.5 font-mono text-[11px] text-blue-800">
                       {slots.map((slot) => (
@@ -843,19 +902,29 @@ export const GroupManagement: React.FC = () => {
                           key={slot.id}
                           className="flex items-center justify-between bg-white/80 px-2.5 py-1 rounded-lg border border-blue-100"
                         >
-                          <span>{slot.name}打卡提醒：</span>
-                          <span className="font-bold text-blue-900">{slot.start} (同步起始)</span>
+                          <span>{slot.name}（{slot.start}-{slot.end}）</span>
+                          <span
+                            className={`font-bold ${
+                              remindAtProblem(slot.start, slot.end, slot.remind_at)
+                                ? 'text-rose-600'
+                                : 'text-blue-900'
+                            }`}
+                          >
+                            {slot.remind_at || '未设置（结束前 5 分钟）'}
+                          </span>
                         </div>
                       ))}
                     </div>
                     <p className="text-[11px] text-blue-700 leading-relaxed border-t border-blue-200/70 pt-1.5">
-                      打卡提醒时间已默认固定为上方管理员填写的打卡起始时间，无需重复手动配置。
+                      提醒时间必须晚于时段开始、早于时段结束（例：08:00-08:30 的时段可填
+                      08:01~08:29）。未填写时默认取「结束前 5 分钟」。到点仅提醒该时段内
+                      仍未打卡的在岗成员，手动提醒不会影响定时提醒照常下发。
                     </p>
                   </div>
                 </div>
 
                 <div className="text-[10px] text-slate-400">
-                  如需变更打卡提醒时间，请在上方的「打卡时段区间设置」中调整起始时间。
+                  修改提醒时间请在上方「考勤打卡时段设置」的每个时段右侧「提醒时间」处调整，保存后立即生效。
                 </div>
               </div>
 

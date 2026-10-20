@@ -114,6 +114,29 @@ export const QuickBackfillModal: React.FC<QuickBackfillModalProps> = ({
     || members[0];
   const enabledMembers = members.filter((m) => m.enabled);
 
+  // ⭐ 2026-10-20 用户指令：补录**不能选该用户已经打卡过的时段**。
+  // 只在「补录日期 = 今天」时前端才拿得到当天的逐时段状态；
+  // 其他日期不猜（由服务端 has_successful_scope -> 409 兜底）。
+  const isToday = backfillDate === todayStr();
+  const doneSlotIds = useMemo(() => {
+    const done = new Set<string>();
+    if (!selectedMember || !isToday) return done;
+    slots.forEach((slot) => {
+      const cell = selectedMember.checkin?.[slot.id];
+      if (cell && cell.time) done.add(slot.id);
+    });
+    return done;
+  }, [selectedMember, slots, isToday]);
+  const availableSlots = slots.filter((s) => !doneSlotIds.has(s.id));
+  const availableKey = availableSlots.map((s) => s.id).join(',');
+
+  // 成员 / 日期变化后，默认落在「该人还没打卡的第一个时段」
+  useEffect(() => {
+    if (!isOpen || bizType !== 'checkin') return;
+    setSlotId(availableSlots[0]?.id || '__all__');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, bizType, selectedId, backfillDate, availableKey]);
+
   const filteredMembers = useMemo(() => {
     const query = memberQuery.trim().toLowerCase();
     if (!query) return enabledMembers;
@@ -152,9 +175,14 @@ export const QuickBackfillModal: React.FC<QuickBackfillModalProps> = ({
     const base = `/api/admin/groups/${gid(groupId)}/backfill`;
     try {
       if (bizType === 'checkin') {
-        const targets = slotId === '__all__' ? slots : slots.filter((s) => s.id === slotId);
+        // ⭐ 2026-10-20：已打卡过的时段 ⛔ 不参与补录（「全部」也只补未完成的）
+        const targets = slotId === '__all__' ? availableSlots : availableSlots.filter((s) => s.id === slotId);
         if (targets.length === 0) {
-          throw new Error('请选择要补录的打卡时段');
+          throw new Error(
+            availableSlots.length === 0 && slots.length > 0
+              ? '该成员今日所有打卡时段都已完成，无需补录'
+              : '请选择要补录的打卡时段'
+          );
         }
         for (const slot of targets) {
           await api.post(`${base}/checkin`, {
@@ -444,13 +472,25 @@ export const QuickBackfillModal: React.FC<QuickBackfillModalProps> = ({
                     onChange={(e) => setSlotId(e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-xl p-2 outline-none font-medium cursor-pointer"
                   >
-                    {slots.map((slot) => (
-                      <option key={slot.id} value={slot.id}>
-                        {slot.name}（{slot.start}-{slot.end}）
-                      </option>
-                    ))}
-                    <option value="__all__">全部时段</option>
+                    {slots.map((slot) => {
+                      const done = doneSlotIds.has(slot.id);
+                      return (
+                        <option key={slot.id} value={slot.id} disabled={done}>
+                          {slot.name}（{slot.start}-{slot.end}）
+                          {done ? ' · 已打卡，不可补录' : ''}
+                        </option>
+                      );
+                    })}
+                    <option value="__all__" disabled={availableSlots.length === 0}>
+                      全部未打卡时段（{availableSlots.length} 个）
+                    </option>
                   </select>
+                  {doneSlotIds.size > 0 && (
+                    <p className="mt-1 text-[10px] text-amber-700">
+                      该成员今日已有 {doneSlotIds.size} 个时段完成打卡，对应时段不可再补录。
+                      {availableSlots.length === 0 ? '（全部时段已完成，无需补录）' : ''}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="text-slate-600 block mb-1 font-semibold text-slate-700">

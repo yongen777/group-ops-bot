@@ -31,7 +31,8 @@ T_0700 = datetime(2026, 10, 13, 7, 0, tzinfo=TZ)
 T_1010 = datetime(2026, 10, 13, 10, 10, tzinfo=TZ)
 
 SINGLE_SLOT = {"slots": [
-    {"id": "am", "name": "上午", "start": "08:00", "end": "09:30"},
+    {"id": "am", "name": "上午", "start": "08:00", "end": "09:30",
+     "remind_at": "08:01"},
 ]}
 
 

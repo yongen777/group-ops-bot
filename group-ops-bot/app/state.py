@@ -293,6 +293,7 @@ CREATE TABLE IF NOT EXISTS reminder_plan (
     session     TEXT,                               -- 打卡时段；其他业务 NULL
     status      TEXT NOT NULL,                      -- pending/sent/unsent
     reason      TEXT,                               -- unsent 原因（脱敏）
+    source      TEXT NOT NULL DEFAULT 'auto',       -- auto 定时 / manual 管理员手动
     created_at  TEXT NOT NULL,
     sent_at     TEXT
 );
@@ -401,7 +402,7 @@ class StateStore:
         row = conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()
         version = int(row["value"]) if row else 0
-        if version >= 8:
+        if version >= 9:
             return
 
         # ---- v2 -> v3：submit_intent.token_id + recovery_task 查证计数 ----
@@ -573,6 +574,21 @@ class StateStore:
             conn.execute("DROP TABLE wl_merge_v8")
         conn.execute(
             "UPDATE meta SET value=? WHERE key='schema_version'", ("8",))
+        conn.commit()
+
+        # ---- v8 -> v9（2026-10-20 用户指令：定时提醒不受手动提醒影响）----
+        # 9.1 reminder_plan 加 source 列（auto 定时 / manual 手动）。
+        #     旧行默认 'auto'（历史数据无法回判来源；当天旧行随周期翻篇失效）。
+        #     判重口径改为：自动调度只被「自动已发」的行拦，
+        #     手动提醒 ⛔ 不再吃掉当期定时提醒。
+        rp_cols = {r["name"] for r in
+                   conn.execute("PRAGMA table_info(reminder_plan)")}
+        if "source" not in rp_cols:
+            conn.execute(
+                "ALTER TABLE reminder_plan ADD COLUMN source TEXT"
+                " NOT NULL DEFAULT 'auto'")
+        conn.execute(
+            "UPDATE meta SET value=? WHERE key='schema_version'", ("9",))
         conn.commit()
 
     def _new_conn(self) -> sqlite3.Connection:
@@ -1345,7 +1361,8 @@ class StateStore:
                              period_key: str, phone: str,
                              session: Optional[str],
                              now: Optional[datetime] = None,
-                             resend_sent: bool = False) -> bool:
+                             resend_sent: bool = False,
+                             source: str = "auto") -> bool:
         """记一条提醒计划（带 5 分钟冷却，用户指令第五阶段）。
 
         - 无记录 -> 插入 pending，返回 True
@@ -1354,21 +1371,29 @@ class StateStore:
         - 已有记录且冷却已过 -> 重置为 pending（周期内可再提醒），True
 
         ⭐ resend_sent（2026-10-17 修复「上午 8 次 / 下午 7 次」重复提醒）：
-        - False（**自动调度**缺省）：status='sent' 的记录 ⛔ 一律不再重置
+        - False（**自动调度**缺省）：status='sent' 的**自动**记录 ⛔ 一律不再重置
           —— 自动提醒每期每人每时段只发一次；unsent / pending 仍按 5 分钟
           冷却重试（推送失败的容错，⛔ 不是重复打扰）。
         - True（**管理后台手动提醒**）：冷却已过可重发，含 sent 行
           —— 管理员主动催，5 分钟冷却只防连点轰炸。
+
+        ⭐ source（2026-10-20 用户指令：定时提醒不得被手动提醒吃掉）：
+        自动调度遇到 status='sent' 且 source='manual' 的行，**视为本期还没
+        自动提醒过** -> 直接接管重置发一次（⛔ 不受 5 分钟冷却拦）。
+        否则「管理员上午手动催过一次」会把下午那场定时提醒整场吃掉
+        （真实事故：2026-10-20 14:00 郑佳没被提醒，见主文档 D26）。
 
         ⚠️ 唯一索引仍兜底并发插入（调度线程与管理端手动触发可能并发）。
         """
         from .period import TZ
         now = _ensure_aware(now) if now else datetime.now(TZ)
         now_iso = now.isoformat(timespec="seconds")
+        source = "manual" if source == "manual" else "auto"
         cur = self._conn.execute(
             "INSERT OR IGNORE INTO reminder_plan(group_id, biz, period_key,"
-            " phone, session, status, created_at) VALUES(?,?,?,?,?,'pending',?)",
-            (group_id, biz, period_key, phone, session, now_iso))
+            " phone, session, status, source, created_at)"
+            " VALUES(?,?,?,?,?,'pending',?,?)",
+            (group_id, biz, period_key, phone, session, source, now_iso))
         self._conn.commit()
         if cur.rowcount > 0:
             return True
@@ -1378,21 +1403,25 @@ class StateStore:
             (group_id, biz, period_key, phone, session)).fetchone()
         if row is None:  # pragma: no cover - 并发删除的极端窗口
             return False
-        if row["status"] == "sent" and not resend_sent:
-            return False   # ⛔ 自动调度：本期已送达 = 不再打扰
-        last_raw = (row["sent_at"]
-                    if row["status"] == "sent" and row["sent_at"]
-                    else row["created_at"])
-        try:
-            last_dt = _ensure_aware(datetime.fromisoformat(last_raw))
-        except (TypeError, ValueError):  # pragma: no cover - 脏数据不当异常
-            last_dt = now
-        if last_dt + timedelta(minutes=REMINDER_COOLDOWN_MINUTES) > now:
-            return False
+        row_source = (row["source"] if "source" in row.keys() else "auto") or "auto"
+        takeover = (source == "auto" and row["status"] == "sent"
+                    and row_source == "manual" and not resend_sent)
+        if row["status"] == "sent" and not resend_sent and not takeover:
+            return False   # ⛔ 自动调度：本期已自动送达 = 不再打扰
+        if not takeover:
+            last_raw = (row["sent_at"]
+                        if row["status"] == "sent" and row["sent_at"]
+                        else row["created_at"])
+            try:
+                last_dt = _ensure_aware(datetime.fromisoformat(last_raw))
+            except (TypeError, ValueError):  # pragma: no cover - 脏数据不当异常
+                last_dt = now
+            if last_dt + timedelta(minutes=REMINDER_COOLDOWN_MINUTES) > now:
+                return False
         self._conn.execute(
             "UPDATE reminder_plan SET status='pending', reason=NULL,"
-            " sent_at=NULL, created_at=? WHERE id=?",
-            (now_iso, row["id"]))
+            " sent_at=NULL, source=?, created_at=? WHERE id=?",
+            (source, now_iso, row["id"]))
         self._conn.commit()
         return True
 
@@ -1487,6 +1516,18 @@ class StateStore:
             " updated_at=? WHERE id=?",
             (password_hash, 1 if must_change_password else 0, utcnow_iso(),
              user_id))
+        self._conn.commit()
+
+    def update_admin_username(self, user_id: int, username: str) -> None:
+        """改管理员登录账号名（⭐ 2026-10-20 用户指令）。
+
+        ⚠️ admin_user.username 是 UNIQUE：重名会抛 sqlite3.IntegrityError，
+        由调用方（auth.change_username）先查重再改，并转成可读错误。
+        会话不受影响：load_session 每次按 user_id 回读用户名。
+        """
+        self._conn.execute(
+            "UPDATE admin_user SET username=?, updated_at=? WHERE id=?",
+            (username, utcnow_iso(), user_id))
         self._conn.commit()
 
     def touch_admin_login(self, user_id: int) -> None:

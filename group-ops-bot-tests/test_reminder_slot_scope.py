@@ -34,9 +34,13 @@ T_0800 = datetime(2026, 10, 13, 8, 0, tzinfo=TZ)      # 上午场开始（自动
 
 def setup_slots(tmp_db):
     setup_group_with_required(tmp_db)
+    # ⭐ 2026-10-20（D26）：提醒时刻 = 各时段 remind_at（这里钉在开始后 1 分钟，
+    # 保持既有「刚开场就催」的断言口径）
     tmp_db.upsert_group_config(GROUP, checkin_deadlines={"slots": [
-        {"id": "am", "name": "上午", "start": "08:00", "end": "12:00"},
-        {"id": "pm", "name": "下午", "start": "14:00", "end": "14:50"},
+        {"id": "am", "name": "上午", "start": "08:00", "end": "12:00",
+         "remind_at": "08:01"},
+        {"id": "pm", "name": "下午", "start": "14:00", "end": "14:50",
+         "remind_at": "14:01"},
     ]})
 
 
@@ -98,9 +102,9 @@ class TestManualReminderScopedToCurrentSlot:
         assert planned_sessions(tmp_db) == set()
 
     def test_auto_reminder_still_single_slot(self, tmp_db):
-        """自动调度口径不变：08:00 只触发上午。"""
+        """自动调度口径不变：08:01（配置的提醒点）只触发上午。"""
         setup_slots(tmp_db)
-        pushed, _ = run(tmp_db, T_0800, manual=False)
+        pushed, _ = run(tmp_db, T_0800.replace(minute=1), manual=False)
         assert len(pushed) == 1
         assert "【打卡·上午】未完成提醒" in pushed[0]
         assert planned_sessions(tmp_db) == {"am"}

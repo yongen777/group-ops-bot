@@ -3,6 +3,8 @@ export interface CheckinSlot {
   name: string;
   start: string;
   end: string;
+  /** 提醒时间点（HH:MM）：必须满足 start < remind_at < end */
+  remind_at?: string;
 }
 
 export interface ReminderRule {

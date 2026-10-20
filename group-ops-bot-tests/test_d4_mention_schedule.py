@@ -4,7 +4,7 @@
 对应用户指令（2026-10-16）：
 - 一：机器人回复必须真正 @（isMentioned / mentionType /
   mentionedMobileList / groupId），⛔ 禁止靠 content 文本假装 @
-- 四：提醒时刻 = 打卡时段开始时间（⛔ 不是「开始后 N 分钟」）
+- 四：提醒时刻 = 各时段配置的提醒时间点（2026-10-20 起；⛔ 不再固定等于时段开始）
 - 五：提醒对象 = 严格按完成状态（已完成 ⛔ 不 @；全完成 ⛔ 不发送；
   时段已结束 ⛔ 不提醒）
 - D4-2：MCP 连接复用（首次建立 / 后续复用 / 失效自动重建）
@@ -83,11 +83,13 @@ class TestRealMentionPayload:
         assert captured["json"]["textMsg"]["mentionedMobileList"] == [PHONE]
 
 
-# ---------- 四：提醒时刻 = 时段开始时间 ----------
+# ---------- 四：提醒时刻 = 各时段配置的提醒时间点（D26 起） ----------
 
 SLOTS_TWO = {"slots": [
-    {"id": "am", "name": "上午", "start": "09:00", "end": "12:00"},
-    {"id": "pm", "name": "下午", "start": "14:00", "end": "18:00"},
+    {"id": "am", "name": "上午", "start": "09:00", "end": "12:00",
+     "remind_at": "09:10"},
+    {"id": "pm", "name": "下午", "start": "14:00", "end": "18:00",
+     "remind_at": "14:10"},
 ]}
 
 
@@ -96,21 +98,28 @@ def _row(slots):
     return {"checkin_deadlines": json.dumps(slots)}
 
 
-class TestReminderMomentIsSlotStart:
-    """09:00-12:00 -> 09:00 提醒；14:00-18:00 -> 14:00 提醒。
+class TestReminderMomentUsesRemindAt:
+    """提醒时刻 = 该时段配置的 remind_at（⭐ 2026-10-20 用户方案）。
 
-    ⛔ 不能再出现「09:30 / 14:30 才提醒」。
+    旧口径是「提醒 = 时段开始」，用户反馈「人还没开工就被催」；
+    现改为每时段单独配置、必须 开始 < remind_at < 结束（本夹具 09:10/14:10）。
     """
 
-    def test_fires_at_0900(self):
-        at = datetime(2026, 10, 16, 9, 0, tzinfo=TZ)
+    def test_fires_at_0910(self):
+        at = datetime(2026, 10, 16, 9, 10, tzinfo=TZ)
         assert reminder_handler._checkin_reminder_times(
             _row(SLOTS_TWO), at) == ["am"]
 
-    def test_fires_at_1400(self):
-        at = datetime(2026, 10, 16, 14, 0, tzinfo=TZ)
+    def test_fires_at_1410(self):
+        at = datetime(2026, 10, 16, 14, 10, tzinfo=TZ)
         assert reminder_handler._checkin_reminder_times(
             _row(SLOTS_TWO), at) == ["pm"]
+
+    def test_not_fire_at_slot_start(self):
+        """⛔ 时段开始那一刻不再触发（这正是用户要改掉的观感）。"""
+        at = datetime(2026, 10, 16, 9, 0, tzinfo=TZ)
+        assert reminder_handler._checkin_reminder_times(
+            _row(SLOTS_TWO), at) == []
 
     def test_not_fire_at_0930(self):
         """⛔ 09:30 不再触发（这正是用户报的「配 09:00 却 09:30 才提醒」）。"""
@@ -134,8 +143,8 @@ class TestReminderMomentIsSlotStart:
             _row(SLOTS_TWO), at) == []
 
     def test_am_only_once_at_pm_moment(self):
-        """多时段：14:00 那轮只提醒 pm，⛔ 不重复提醒 am。"""
-        at = datetime(2026, 10, 16, 14, 2, tzinfo=TZ)
+        """多时段：14:10 那轮只提醒 pm，⛔ 不重复提醒 am。"""
+        at = datetime(2026, 10, 16, 14, 12, tzinfo=TZ)
         assert reminder_handler._checkin_reminder_times(
             _row(SLOTS_TWO), at) == ["pm"]
 

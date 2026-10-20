@@ -71,8 +71,10 @@ class TestSlotsParsing:
         ]})
         slots = slots_of(tmp_db)
         assert [s["id"] for s in slots] == ["am", "noon", "pm"]
-        assert slots[0] == {"id": "am", "name": "上午",
-                            "start": "08:00", "end": "09:30"}
+        assert slots[0]["id"] == "am"
+        assert slots[0]["start"] == "08:00" and slots[0]["end"] == "09:30"
+        # ⭐ 2026-10-20（D26）：未配置提醒点 -> 默认「结束前 5 分钟」
+        assert slots[0]["remind_at"] == "09:25"
 
     def test_legacy_format_compat(self, tmp_db):
         """旧格式 {"am":"09:00","pm":"14:50"} -> 两个区间（am 00:00~09:00）。"""

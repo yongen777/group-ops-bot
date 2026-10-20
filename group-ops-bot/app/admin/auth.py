@@ -54,6 +54,9 @@ SESSION_IDLE_MINUTES = max(0, _env_int("GOPS_ADMIN_SESSION_IDLE_MINUTES", 0))
 
 PBKDF2_ITERATIONS = 260_000
 MIN_PASSWORD_LEN = 8
+# 管理员账号名长度（⭐ 2026-10-20 用户指令：后台允许改登录账号名）
+USERNAME_MIN_LEN = 2
+USERNAME_MAX_LEN = 32
 
 
 # ---------- 密码哈希 ----------
@@ -297,6 +300,34 @@ def change_password(state: StateStore, identity: AdminIdentity,
     return True, None
 
 
+def change_username(state: StateStore, identity: AdminIdentity,
+                    new_username: str, password: str) -> tuple:
+    """改登录账号名（⭐ 2026-10-20 用户指令）。
+
+    返回 (ok, error)。规则：
+    - 必须先校验**当前密码**（账号名 = 登录凭据，⛔ 不能仅凭会话就改）
+    - 2~32 位、⛔ 不含空白；⛔ 与当前同名；⛔ 与他人重名（UNIQUE 兜底）
+    - 改完**不吊销会话**：load_session 每次按 user_id 回读用户名，立即生效
+    """
+    user = state.get_admin_user_by_id(identity.user_id)
+    if user is None:
+        return False, "用户不存在"
+    if not verify_password(password, user["password_hash"]):
+        return False, "密码不正确"
+    name = (new_username or "").strip()
+    if not (USERNAME_MIN_LEN <= len(name) <= USERNAME_MAX_LEN):
+        return False, "账号名长度需在 %d~%d 位之间" % (USERNAME_MIN_LEN,
+                                                      USERNAME_MAX_LEN)
+    if any(ch.isspace() for ch in name):
+        return False, "账号名不能包含空格"
+    if name == identity.username:
+        return False, "新账号名与当前账号名相同"
+    if state.get_admin_user(name) is not None:
+        return False, "该账号名已被占用"
+    state.update_admin_username(identity.user_id, name)
+    return True, None
+
+
 __all__ = [
     "AdminIdentity", "SESSION_COOKIE_NAME", "CSRF_HEADER_NAME",
     "SESSION_ABSOLUTE_HOURS", "SESSION_IDLE_MINUTES", "MIN_PASSWORD_LEN",
@@ -304,4 +335,5 @@ __all__ = [
     "hash_password", "verify_password", "login", "create_session",
     "load_session", "destroy_session", "verify_csrf", "check_origin",
     "client_ip", "cookie_secure", "bootstrap_admin", "change_password",
+    "change_username", "USERNAME_MIN_LEN", "USERNAME_MAX_LEN",
 ]

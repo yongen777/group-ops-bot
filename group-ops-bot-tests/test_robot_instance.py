@@ -128,14 +128,15 @@ def _ready_admin_client(tmp_db, tmp_path, monkeypatch):
 # ---------- 1. 迁移（v5 -> v6 非破坏性） ----------
 
 class TestMigrationV5ToV6:
-    def test_new_db_builds_v8(self, tmp_db):
+    def test_new_db_builds_v9(self, tmp_db):
         conn = tmp_db._conn
         version = conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'"
         ).fetchone()["value"]
         # v6 实例表 + v7 h5_upload（§4.11.4 D4 定夺）
-        # + v8 白名单单权化（2026-10-19）叠加在同一迁移链上
-        assert version == "8"
+        # + v8 白名单单权化（2026-10-19）
+        # + v9 reminder_plan.source（2026-10-20）叠加在同一迁移链上
+        assert version == "9"
         cols = {r["name"] for r in conn.execute(
             "PRAGMA table_info(qmx_robot_instance)")}
         assert cols == {"group_id", "display_name", "webhook_base_url",
@@ -162,7 +163,7 @@ class TestMigrationV5ToV6:
             conn = store._conn
             assert conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
-            ).fetchone()["value"] == "8"
+            ).fetchone()["value"] == "9"
             tables = {r["name"] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             assert "qmx_robot_instance" in tables

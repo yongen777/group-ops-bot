@@ -204,7 +204,8 @@ class TestPerBizIndependent:
         """
         setup_group_with_required(tmp_db)
         tmp_db.upsert_group_config(GROUP, checkin_deadlines={"slots": [
-            {"id": "morning", "name": "早场", "start": "06:00", "end": "08:30"},
+            {"id": "morning", "name": "早场", "start": "06:00", "end": "08:30",
+             "remind_at": "06:01"},
         ]})
         set_rules(tmp_db, {"checkin": {"enabled": True, "times": ["06:00"]},
                            "summary": {"enabled": False},

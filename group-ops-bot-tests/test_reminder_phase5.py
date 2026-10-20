@@ -217,8 +217,10 @@ class TestNoRepeatWithinTriggerWindow:
     """
 
     SLOTS = {"slots": [
-        {"id": "am", "name": "上午", "start": "09:00", "end": "12:00"},
-        {"id": "pm", "name": "下午", "start": "14:00", "end": "14:50"},
+        {"id": "am", "name": "上午", "start": "09:00", "end": "12:00",
+         "remind_at": "09:01"},
+        {"id": "pm", "name": "下午", "start": "14:00", "end": "14:50",
+         "remind_at": "14:01"},
     ]}
 
     def _setup(self, tmp_db):

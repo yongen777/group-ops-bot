@@ -83,9 +83,14 @@ def enable_all(store, group_id=GROUP, period_type="daily") -> None:
         biz_switches={"checkin": True, "summary": True, "report": True,
                       "reminder": True, "statistics": True},
         period_type=period_type,
+        # ⭐ 2026-10-20（D26）：提醒时刻改为按时段配置的 remind_at（⛔ 不再是
+        # start）。夹具把提醒点钉在「时段开始后 1 分钟」，让既有 happy-path
+        # 用例保持「刚开场就催」的触发时机不变，不必逐个改断言。
         checkin_deadlines={"slots": [
-            {"id": "am", "name": "上午", "start": "00:00", "end": "12:00"},
-            {"id": "pm", "name": "下午", "start": "12:00", "end": "23:59"},
+            {"id": "am", "name": "上午", "start": "00:00", "end": "12:00",
+             "remind_at": "00:01"},
+            {"id": "pm", "name": "下午", "start": "12:00", "end": "23:59",
+             "remind_at": "12:01"},
         ]})
 
 

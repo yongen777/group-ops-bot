@@ -1,7 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   User,
+  UserCog,
   Key,
+  Link2,
+  Copy,
+  Check,
   LogOut,
   X,
   CheckCircle2,
@@ -180,6 +184,318 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
 };
 
 /* ------------------------------------------------------------------ */
+/* 回调地址查看（⭐ 2026-10-20 用户指令：必须再输一次密码；只读不可改）   */
+/* ------------------------------------------------------------------ */
+
+interface CallbackUrlModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export const CallbackUrlModal: React.FC<CallbackUrlModalProps> = ({ isOpen, onClose }) => {
+  const [password, setPassword] = useState('');
+  const [url, setUrl] = useState('');
+  const [note, setNote] = useState('');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setPassword('');
+    setUrl('');
+    setNote('');
+    setErrorMsg(null);
+    setCopied(false);
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const verify = async () => {
+    setErrorMsg(null);
+    if (!password) {
+      setErrorMsg('请输入登录密码以查看回调地址');
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api.post<{ ok: boolean; url: string; note?: string }>(
+        '/api/admin/callback-url',
+        { password },
+      );
+      setUrl(data.url || '');
+      setNote(data.note || '');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? plainError(err.message) : '验证未通过');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async () => {
+    if (!url) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        // 内网 http 下 navigator.clipboard 不可用：退回 execCommand
+        const el = document.createElement('textarea');
+        el.value = url;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setErrorMsg('复制失败，请手动选中地址复制');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xs">
+              <Link2 className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 text-base">群消息回调地址</h3>
+              <span className="text-[11px] text-slate-400">量子密信平台接入配置 · 只读</span>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {errorMsg && (
+          <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {!url ? (
+          <div className="space-y-3 text-xs">
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 leading-relaxed">
+              回调地址属于部署级配置，<span className="font-bold">查看前需再次验证登录密码</span>。
+              验证通过后仅可查看与复制，后台不提供修改入口。
+            </div>
+            <div>
+              <label className="font-semibold text-slate-700 block mb-1">登录密码</label>
+              <input
+                type="password"
+                placeholder="请输入当前登录密码"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') verify();
+                }}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500 focus:bg-white"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                onClick={onClose}
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-medium cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={verify}
+                disabled={busy}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-xs cursor-pointer disabled:opacity-60"
+              >
+                {busy ? '正在验证…' : '验证并查看'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3 text-xs">
+            <div>
+              <label className="font-semibold text-slate-700 block mb-1">回调地址（POST JSON）</label>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={url}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono text-[12px] text-slate-800 outline-none"
+                />
+                <button
+                  onClick={copy}
+                  className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? '已复制' : '复制'}</span>
+                </button>
+              </div>
+            </div>
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 leading-relaxed">
+              {note || '该地址由服务器部署配置决定，后台只能查看与复制，不能修改。'}
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-900 text-white rounded-xl font-medium cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* 修改管理员账号名（⭐ 2026-10-20 用户指令：需验证登录密码）             */
+/* ------------------------------------------------------------------ */
+
+interface ChangeUsernameModalProps {
+  isOpen: boolean;
+  current: string;
+  onClose: () => void;
+  onChanged: (username: string) => void;
+}
+
+export const ChangeUsernameModal: React.FC<ChangeUsernameModalProps> = ({
+  isOpen,
+  current,
+  onClose,
+  onChanged,
+}) => {
+  const [newUsername, setNewUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setNewUsername('');
+    setPassword('');
+    setErrorMsg(null);
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const submit = async () => {
+    setErrorMsg(null);
+    const name = newUsername.trim();
+    if (name.length < 2 || name.length > 32) {
+      setErrorMsg('账号名长度需在 2~32 位之间');
+      return;
+    }
+    if (/\s/.test(name)) {
+      setErrorMsg('账号名不能包含空格');
+      return;
+    }
+    if (name === current) {
+      setErrorMsg('新账号名与当前账号名相同');
+      return;
+    }
+    if (!password) {
+      setErrorMsg('请输入登录密码以验证身份');
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api.post<{ ok: boolean; username: string }>(
+        '/api/admin/username',
+        { new_username: name, password },
+      );
+      onChanged(data.username || name);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? plainError(err.message) : '修改未成功');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-xs">
+              <UserCog className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 text-base">修改登录账号名</h3>
+              <span className="text-[11px] text-slate-400">改完下次登录请使用新账号名</span>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {errorMsg && (
+          <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        <div className="space-y-3 text-xs">
+          <div className="p-2.5 bg-slate-50 border border-slate-100 rounded-xl flex justify-between">
+            <span className="text-slate-400">当前账号名</span>
+            <span className="font-semibold text-slate-800 font-mono">{current}</span>
+          </div>
+          <div>
+            <label className="font-semibold text-slate-700 block mb-1">新账号名（2~32 位，不含空格）</label>
+            <input
+              type="text"
+              placeholder="请输入新的登录账号名"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500 focus:bg-white"
+            />
+          </div>
+          <div>
+            <label className="font-semibold text-slate-700 block mb-1">登录密码（用于验证身份）</label>
+            <input
+              type="password"
+              placeholder="请输入当前登录密码"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submit();
+              }}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 outline-none focus:border-blue-500 focus:bg-white"
+            />
+          </div>
+          <div className="pt-2 flex items-center justify-end gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-medium cursor-pointer"
+            >
+              取消
+            </button>
+            <button
+              onClick={submit}
+              disabled={busy}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-xs cursor-pointer disabled:opacity-60"
+            >
+              {busy ? '正在提交…' : '确认修改'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
 /* 侧边栏底部管理员卡片                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -190,10 +506,15 @@ interface AdminUserCardProps {
 
 export const AdminUserCard: React.FC<AdminUserCardProps> = ({ me, onLoggedOut }) => {
   const [open, setOpen] = useState(false);
-  const [modal, setModal] = useState<'none' | 'password' | 'profile' | 'logout'>('none');
+  const [modal, setModal] = useState<
+    'none' | 'password' | 'profile' | 'callback' | 'username' | 'logout'
+  >('none');
   const [busy, setBusy] = useState(false);
+  // ⭐ 2026-10-20：改完账号名立即刷新卡片显示（不必整页重载）
+  const [displayName, setDisplayName] = useState(me.username || '');
+  useEffect(() => setDisplayName(me.username || ''), [me.username]);
 
-  const display = me.username || '管理员';
+  const display = displayName || '管理员';
   const initial = display.slice(0, 1).toUpperCase();
 
   const doLogout = async () => {
@@ -252,6 +573,28 @@ export const AdminUserCard: React.FC<AdminUserCardProps> = ({ me, onLoggedOut })
             <button
               onClick={() => {
                 setOpen(false);
+                setModal('callback');
+              }}
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-2 cursor-pointer transition-colors"
+            >
+              <Link2 className="w-3.5 h-3.5 text-slate-500" />
+              <span>查看回调地址</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setOpen(false);
+                setModal('username');
+              }}
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-2 cursor-pointer transition-colors"
+            >
+              <UserCog className="w-3.5 h-3.5 text-slate-500" />
+              <span>修改账号名</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setOpen(false);
                 setModal('profile');
               }}
               className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-2 cursor-pointer transition-colors"
@@ -282,6 +625,21 @@ export const AdminUserCard: React.FC<AdminUserCardProps> = ({ me, onLoggedOut })
         onChanged={() => setModal('none')}
       />
 
+      <CallbackUrlModal
+        isOpen={modal === 'callback'}
+        onClose={() => setModal('none')}
+      />
+
+      <ChangeUsernameModal
+        isOpen={modal === 'username'}
+        current={display}
+        onClose={() => setModal('none')}
+        onChanged={(name) => {
+          setDisplayName(name);
+          setModal('none');
+        }}
+      />
+
       {modal === 'profile' && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 space-y-4">
@@ -306,7 +664,7 @@ export const AdminUserCard: React.FC<AdminUserCardProps> = ({ me, onLoggedOut })
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-2 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-400">登录账号</span>
-                <span className="font-semibold text-slate-800 font-mono">{me.username}</span>
+                <span className="font-semibold text-slate-800 font-mono">{display}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">系统身份</span>

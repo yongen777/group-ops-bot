@@ -193,8 +193,29 @@ def _validate_slots(payload) -> dict:
                 status_code=400,
                 detail="时间段「%s」的开始时间需要早于结束时间，且不支持跨夜"
                 % slot_id)
-        normalized.append({"id": slot_id, "name": (name or "").strip(),
-                           "start": start, "end": end})
+        # ⭐ 2026-10-20 用户方案：提醒时间点必须落在时段**内部**（开区间）。
+        # 8:00-8:30 的时段只能填 08:01~08:29 —— 等于开始 / 等于结束都拒绝。
+        # 留空 -> 不写 remind_at，读取时按「结束前 5 分钟」补默认值。
+        remind_at = item.get("remind_at")
+        if isinstance(remind_at, str):
+            remind_at = remind_at.strip()
+        if remind_at in (None, ""):
+            remind_at = None
+        else:
+            _validate_hhmm(remind_at, "提醒时间")
+            from ..handlers import checkin as _checkin_mod
+            problem = _checkin_mod.remind_at_error(start, end, remind_at)
+            if problem:
+                raise HTTPException(
+                    status_code=400,
+                    detail="时段「%s」%s（提醒时间必须严格落在时段开始与结束"
+                           "之间，例如 08:00-08:30 的时段可填 08:01~08:29）"
+                           % (slot_id, problem))
+        entry = {"id": slot_id, "name": (name or "").strip(),
+                 "start": start, "end": end}
+        if remind_at:
+            entry["remind_at"] = remind_at
+        normalized.append(entry)
     normalized.sort(key=lambda s: s["start"])
     for prev, cur in zip(normalized, normalized[1:]):
         if cur["start"] < prev["end"]:
@@ -409,6 +430,62 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _audit(state, request, identity, "change_password", None,
                identity.username, None)
         return {"ok": True, "message": "密码已修改，请重新登录"}
+
+    @router.post("/callback-url")
+    def callback_url(body: dict = Body(...), request: Request = None):
+        """查看群回调地址（⭐ 2026-10-20 用户指令）。
+
+        - **必须再次输入登录密码**才返回地址（⛔ 不另设一套查看口令）
+        - 地址来自部署配置（`GOPS_EXTERNAL_BASE_URL` + `/api/callback`），
+          后台**只读展示**，⛔ 不提供任何修改入口（改了会影响平台侧配置）
+        - 审计只记「谁看过」，⛔ 不落密码
+        """
+        identity = _identity(request, state)
+        _require_csrf(request, identity)
+        password = body.get("password")
+        if not isinstance(password, str) or not password:
+            raise HTTPException(status_code=400,
+                                detail="请输入登录密码以验证身份")
+        user = state.get_admin_user_by_id(identity.user_id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="未登录或会话已过期")
+        if not auth.verify_password(password, user["password_hash"]):
+            _audit(state, request, identity, "callback_url.view", None,
+                   identity.username, {"result": "bad_password"},
+                   result="rejected")
+            raise HTTPException(status_code=403,
+                                detail="密码不正确，无法查看回调地址")
+        base = ((config.external_base_url if config else "") or "").rstrip("/")
+        _audit(state, request, identity, "callback_url.view", None,
+               identity.username, {"base_url": base})
+        return {"ok": True, "url": base + "/api/callback",
+                "base_url": base, "path": "/api/callback",
+                "method": "POST", "readonly": True,
+                "note": "该地址由服务器部署配置决定，后台只能查看与复制，不能修改"}
+
+    @router.post("/username")
+    def change_username(body: dict = Body(...), request: Request = None):
+        """修改管理员登录账号名（⭐ 2026-10-20 用户指令）。
+
+        需再次输入登录密码：账号名本身就是登录凭据，⛔ 不允许仅凭会话直接改。
+        改完不吊销当前会话（load_session 按 user_id 回读用户名，立即生效）。
+        """
+        identity = _identity(request, state)
+        _require_csrf(request, identity)
+        new_username = _clean_str(body.get("new_username"), "新账号名", 32)
+        password = body.get("password")
+        if not isinstance(password, str) or not password:
+            raise HTTPException(status_code=400,
+                                detail="请输入登录密码以验证身份")
+        ok, error = auth.change_username(state, identity, new_username, password)
+        if not ok:
+            _audit(state, request, identity, "admin.rename", None,
+                   identity.username, {"result": error}, result="rejected")
+            raise HTTPException(status_code=400, detail=error)
+        _audit(state, request, identity, "admin.rename", None,
+               identity.username,
+               {"old_username": identity.username, "new_username": new_username})
+        return {"ok": True, "username": new_username}
 
     # ---------- 群管理 ----------
 

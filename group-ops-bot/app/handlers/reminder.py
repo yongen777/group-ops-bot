@@ -12,7 +12,9 @@
 - enabled：该业务独立开关（关 = 不计不发送，即使群提醒总开关开着）
 - times：该业务的提醒时刻表（HH:MM，多个；到点才判定）
   ⚠️ 2026-10-16 用户指令三：**打卡业务的 times 不再作为触发时刻** ——
-  打卡提醒时刻固定 = 各时段**开始时间**（见 _checkin_reminder_times）；
+  打卡提醒时刻 = 各时段配置的**提醒时间点 remind_at**（2026-10-20 用户方案：
+  边界必须 开始 < remind_at < 结束，如 08:00-08:30 只能填 08:01~08:29；
+  未配置时默认 = 结束前 5 分钟），见 _checkin_reminder_times；
   times 仅为兼容保留（旧配置不炸），⛔ 不得再拿它当打卡触发时刻。
 - text：该业务的提醒文本（留空 = 默认文案；非空 = 拼接未完成名单）
 旧格式（{"checkin": ["09:00", ...]} 纯时间列表）自动兼容转换。
@@ -104,14 +106,16 @@ def _minute_of_day(hhmm: str) -> Optional[int]:
 
 
 def _checkin_reminder_times(group_row, now: datetime) -> list:
-    """打卡业务本轮触发的**时段 id**（触发时刻 = 该时段开始时间）。
+    """打卡业务本轮触发的**时段 id**（触发时刻 = 该时段的提醒时间点）。
 
-    2026-10-16 用户指令四：提醒时间 = 打卡时段开始时间
-    （如 09:00-12:00 -> 09:00 提醒，⛔ 不是「开始后 30 分钟」）。
+    ⭐ 2026-10-20 用户方案（D26）：提醒时刻不再固定等于时段开始，而是每个
+    时段单独配置的 ``remind_at`` —— 边界必须**开始 < 提醒 < 结束**
+    （8:00-8:30 的时段只能填 08:01~08:29）；未配置时默认 = 结束前 5 分钟。
+    这样解决「用户还没开始干活就被催」的观感问题，且管理员可按需前移。
 
-    触发窗口语义（解决「09:30 才提醒」的根因）：
-    - 落在 ``[start, start + 窗口)`` 内 -> 该时段本轮应提醒；
-    - 窗口默认 **8 分钟**（> 调度 60s 的粒度，保证开始那一刻必被某轮覆盖）；
+    触发窗口语义（不变）：
+    - 落在 ``[remind_at, remind_at + 窗口)`` 内 -> 该时段本轮应提醒；
+    - 窗口默认 **8 分钟**（> 调度 60s 的粒度，保证到点那一刻必被某轮覆盖）；
     - ⛔ 已结束时段不再提醒（指令五）；⛔ 超窗不补发；
     - 每个时段每天只提醒一次 ⛔ —— 由 reminder_plan 唯一索引保证。
     """
@@ -120,11 +124,13 @@ def _checkin_reminder_times(group_row, now: datetime) -> list:
     now_min = now.hour * 60 + now.minute
     hits = []
     for slot in slots:
-        start = _minute_of_day(slot["start"])
         end = _minute_of_day(slot["end"])
-        if start is None or end is None or now_min >= end:
+        if end is None or now_min >= end:
             continue  # ⛔ 时段已结束 -> 不再提醒
-        if start <= now_min < start + REMINDER_TRIGGER_WINDOW_MINUTES:
+        remind_at = _minute_of_day(checkin_handler.slot_remind_at(slot))
+        if remind_at is None:
+            continue
+        if remind_at <= now_min < remind_at + REMINDER_TRIGGER_WINDOW_MINUTES:
             hits.append(slot["id"])   # ⭐ 返回 id（compute_incomplete 按 id 查）
     return hits
 
@@ -459,7 +465,10 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
                 group_id=target.group_id, biz=target.biz,
                 period_key=target.period_key, phone=target.phone,
                 session=target.session, now=now,
-                resend_sent=manual)
+                resend_sent=manual,
+                # ⭐ 2026-10-20：来源落库 —— 自动调度只被「自动已发」的行拦，
+                # 手动提醒 ⛔ 不再吃掉当期定时提醒（真实事故：14:00 郑佳未被提醒）
+                source="manual" if manual else "auto")
             if allowed:
                 fresh.append(target)
             else:
