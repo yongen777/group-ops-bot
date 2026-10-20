@@ -160,7 +160,11 @@ class TestReminderTick:
 
 
 class TestExportWorkbook:
-    """单业务导出构建器（第六阶段；⛔ 不再有一键导全部的组合表）。"""
+    """单业务导出构建器（⭐ 2026-10-20：三业务各一个文件 + 全员视角列）。
+
+    列序统一为：序号 / 提交状态 / 手机号 / 姓名 / …… / 备注。
+    「提交状态」放第二列 —— 群里下载后一眼看出谁没交。
+    """
 
     def test_checkin_sheet(self, tmp_db):
         data = stats_handler.build_export_workbook(
@@ -175,11 +179,14 @@ class TestExportWorkbook:
         wb = load_workbook(BytesIO(data))
         assert wb.sheetnames == ["打卡"]
         header = [c.value for c in wb["打卡"][1]]
-        assert header == ["手机号", "姓名", "时段", "打卡时间", "状态",
-                          "录入来源", "图片名"]
+        assert header == ["序号", "提交状态", "手机号", "姓名", "时段",
+                          "打卡时间", "考核结果", "录入来源", "凭证图片",
+                          "备注"]
         row2 = [c.value for c in wb["打卡"][2]]
-        assert row2[0] == PHONE and row2[2] == "上午"
-        assert row2[4] == "NORMAL" and row2[5] == "user"
+        assert row2[0] == 1 and row2[1] == "已提交"
+        assert row2[2] == PHONE and row2[4] == "上午"
+        # 状态走中文标签（⛔ 不再把 NORMAL / user 这种枚举直接丢给群员）
+        assert row2[6] == "按时" and row2[7] == "群员"
 
     def test_summary_sheet(self, tmp_db):
         data = stats_handler.build_export_workbook(
@@ -192,8 +199,10 @@ class TestExportWorkbook:
         from openpyxl import load_workbook
         wb = load_workbook(BytesIO(data))
         assert wb.sheetnames == ["总结"]
-        assert [c.value for c in wb["总结"][2]] == [
-            PHONE, "甲", "daily", "修复 3 个 bug", "user", "t2"]
+        row2 = [c.value for c in wb["总结"][2]]
+        assert row2[:9] == [1, "已提交", PHONE, "甲", "日报", "2026-10-13",
+                            "t2", "群员", "修复 3 个 bug"]
+        assert row2[9] in (None, "")     # 备注列留空（openpyxl 空串回落 None）
 
     def test_report_dynamic_columns_only_filled_fields(self, tmp_db):
         """动态字段：只展示有人填的字段（按 field_id 归并，快照列名）。"""
@@ -212,10 +221,13 @@ class TestExportWorkbook:
         assert wb.sheetnames == ["报数"]
         header = [c.value for c in wb["报数"][1]]
         # 字段 3（没人填）⛔ 不出列；单位进列名（快照）
-        assert header == ["手机号", "姓名", "角色", "bug修复数",
-                          "代码行数（行）"]
-        assert [c.value for c in wb["报数"][2]] == [
-            PHONE, "甲", "开发", 3, 500]
+        assert header == ["序号", "提交状态", "手机号", "姓名", "提交时间",
+                          "录入来源", "bug修复数", "代码行数（行）", "备注"]
+        # D7 起角色绑定已取消：旧数据里的 role 落到「备注」，⛔ 不丢信息
+        # 该记录未带 entry_source -> 录入来源列为空
+        assert [c.value for c in wb["报数"][2]][:8] == [
+            1, "已提交", PHONE, "甲", "t3", None, 3, 500]
+        assert [c.value for c in wb["报数"][2]][-1] == "角色：开发"
 
     def test_report_empty_records_header_only(self, tmp_db):
         data = stats_handler.build_export_workbook("report", None,
@@ -223,7 +235,9 @@ class TestExportWorkbook:
         from io import BytesIO
         from openpyxl import load_workbook
         wb = load_workbook(BytesIO(data))
-        assert [c.value for c in wb["报数"][1]] == ["手机号", "姓名", "角色"]
+        assert [c.value for c in wb["报数"][1]] == [
+            "序号", "提交状态", "手机号", "姓名", "提交时间", "录入来源",
+            "备注"]
         assert wb["报数"].max_row == 1
 
     def test_report_snapshot_name_survives_pool_rename(self, tmp_db):
@@ -236,4 +250,5 @@ class TestExportWorkbook:
         from io import BytesIO
         from openpyxl import load_workbook
         wb = load_workbook(BytesIO(data))
-        assert [c.value for c in wb["报数"][1]][-1] == "旧名字段"
+        # 最后一列是「备注」，字段列在倒数第二
+        assert [c.value for c in wb["报数"][1]][-2] == "旧名字段"

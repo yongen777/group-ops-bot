@@ -353,7 +353,7 @@ def _checkin_deadline_text(group_row, now: datetime, targets: list) -> str:
     if open_slots:
         return "、".join("%s（%s）" % (s["end"], s["name"])
                          for s in open_slots)
-    return "今日打卡时段已结束，如需补交请联系群管理员"
+    return "今日打卡时段已结束，如需补交请联系后台管理员"
 
 
 def run_group(state: StateStore, backend: Backend, push, group_row,

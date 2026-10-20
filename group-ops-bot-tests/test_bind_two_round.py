@@ -113,7 +113,7 @@ class TestRoundTwo:
             "「总结」提交当日总结\n"
             "「报数」提交当日工作报数\n"
             "「实名」录入个人姓名与手机号至本群\n"
-            "「导出」一键导出全部业务的统计表（仅管理员可用）")
+            "「导出」一键导出全部业务的统计表（仅后台授权的管理员可用）")
         assert reply.endswith(expected_guide)
         # ⛔ 不重复列「绑定」
         assert "「绑定」将本群接入机器人" not in reply

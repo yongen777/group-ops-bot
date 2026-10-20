@@ -376,8 +376,13 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
             # best-effort：回推失败只记日志，⛔ 不改写已完成的 A/B/C 归类
             # ⭐ 2026-10-16 用户指令一：群聊所有反馈都 @ 发送者（真实手机号，
             # ⛔ 不靠正文假装 @）；mention 由适配器注入载荷，见 qmx.reply_text。
+            # ⭐ 2026-10-20 用户指令：**导出成功的回执是面向全员的通报**，
+            # 文案里已写「@所有人」，⛔ 不再额外 @ 提问者（他不需要被单独点名）。
+            # 失败/部分成功仍 @ 提问者 —— 他得知道文件没发出去。
+            mention = (None if stats_handler.is_broadcast_receipt(reply)
+                       else [inbound.phone])
             delivered = sender.reply(inbound.reply_url, reply,
-                                     mention_phones=[inbound.phone],
+                                     mention_phones=mention,
                                      group_id=inbound.group_id)
             # replied 只说明"有话要说"，⛔ 不代表群里真的出现（2026-10-15
             # 实测：平台回 2xx 但群里无消息，故 replied/delivered 分开报）

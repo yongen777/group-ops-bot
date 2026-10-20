@@ -371,7 +371,8 @@ class TestSlotLabelExport:
              "entry_source": "user", "image_name": "b.jpg"},
         ]}
 
-    def test_csv_uses_configured_slot_name(self, tmp_db):
+    def test_group_export_uses_configured_slot_name(self, tmp_db):
+        """群里导出（现在是 xlsx 三文件）同样用本群时段名。"""
         enable_all(tmp_db)
         tmp_db.upsert_group_config(GROUP, checkin_deadlines=self.SLOTS)
         tmp_db.upsert_whitelist(GROUP, PHONE)
@@ -382,15 +383,18 @@ class TestSlotLabelExport:
             now=datetime(2026, 10, 20, 10, 0, tzinfo=TZ))
         stats_handler.handle_command(commands.parse("导出"), ctx)
         files = sorted((Path(str(tmp_db.db_path)).parent / "exports")
-                       .glob("*.csv"))
-        assert files
-        text = files[-1].read_text(encoding="utf-8-sig")
-        assert "晚班" in text
-        assert "上午" in text
-        # slot_3 那行 ⛔ 不能再被写成「下午」
-        for line in text.splitlines():
-            if "slot_3" in line or "19:05" in line:
-                assert "下午" not in line
+                       .glob("checkin_*.xlsx"))
+        assert files, "no checkin_*.xlsx written"
+        from io import BytesIO
+        from openpyxl import load_workbook
+        ws = load_workbook(BytesIO(files[-1].read_bytes())).active
+        # 列序：序号 / 提交状态 / 手机号 / 姓名 / 时段 ...
+        labels = [row[4] for row in
+                  ws.iter_rows(min_row=2, values_only=True)]
+        assert "晚班" in labels
+        assert "上午" in labels
+        # slot_3 ⛔ 不能再被写成「下午」
+        assert "下午" not in labels
 
     def test_xlsx_fallback_sheet_uses_configured_name(self, tmp_db):
         enable_all(tmp_db)
@@ -401,8 +405,8 @@ class TestSlotLabelExport:
         from openpyxl import load_workbook
         import io
         ws = load_workbook(io.BytesIO(data)).active
-        labels = [row[2] for row in ws.iter_rows(min_row=2, values_only=True)]
-        assert labels == ["晚班", "上午"]
+        labels = [row[4] for row in ws.iter_rows(min_row=2, values_only=True)]
+        assert sorted(labels) == sorted(["上午", "晚班"])
 
     def test_admin_export_uses_configured_name(self, tmp_db):
         enable_all(tmp_db)

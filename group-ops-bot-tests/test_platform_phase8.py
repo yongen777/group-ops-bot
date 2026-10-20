@@ -233,10 +233,12 @@ class TestExportSendSeam:
         # ⭐ 2026-10-20 用户指令：回执统一成「@所有人 + 固定文案」
         assert reply.startswith("@所有人 📊")
         assert "已发送至群聊" in reply
-        assert len(sender.files_sent) == 1
-        assert sender.files_sent[0]["group_id"] == GROUP
-        # 优先 CSV（与后台导出口径一致）
-        assert sender.files_sent[0]["filename"].endswith(".csv")
+        # ⭐ 2026-10-20 用户指令：三个业务各一个 xlsx 文件（⛔ 不再是单个 csv）
+        assert len(sender.files_sent) == 3
+        assert [f["filename"] for f in sender.files_sent] == [
+            "checkin_20261013_1000.xlsx", "summary_20261013_1000.xlsx",
+            "report_20261013_1000.xlsx"]
+        assert {f["group_id"] for f in sender.files_sent} == {GROUP}
 
     def test_adapter_failure_keeps_blocked_wording(self, tmp_db):
         backend = self._setup(tmp_db)
