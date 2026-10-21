@@ -9,6 +9,8 @@ import {
   Check,
   X,
   FileSpreadsheet,
+  Clock,
+  CircleSlash,
 } from 'lucide-react';
 import { api, gid, plainError, qs } from '../../lib/api';
 import { useApp } from '../../lib/store';
@@ -112,10 +114,36 @@ export const Statistics: React.FC = () => {
     [switches],
   );
 
-  const totalCount = board?.members.length || 0;
+  /** 是否存在「已到截止点仍缺」的业务（决定徽章是「待补录」还是「未完成」） */
+  const hasOverdue = useCallback(
+    (m: BoardMember): boolean => {
+      const checkinOverdue = Object.values(m.checkin || {}).some(
+        (cell) => cell.status === 'overdue',
+      );
+      return (
+        checkinOverdue ||
+        m.summary_status === 'overdue' ||
+        m.report_status === 'overdue'
+      );
+    },
+    [],
+  );
+
+  /**
+   * ⭐ D31 修复 4（2026-10-21）：在岗成员 = 未暂停考核的人。
+   * 暂停考核的成员没有考核义务 —— ⛔ 不拉低完成率分母，⛔ 也不进
+   * 「未完成 / 待补录」清单（否则天天显示某人「缺卡」，其实人已被移出考核）。
+   * 全员都被暂停时退回全体，免得统计条全 0 看着像坏了。
+   */
+  const activeMembers = useMemo(() => {
+    const en = (board?.members || []).filter((m) => m.enabled !== false);
+    return en.length > 0 ? en : board?.members || [];
+  }, [board]);
+
+  const totalCount = activeMembers.length;
   const completedCount = useMemo(
-    () => (board ? board.members.filter((m) => isAchieved(m)).length : 0),
-    [board, isAchieved],
+    () => activeMembers.filter((m) => isAchieved(m)).length,
+    [activeMembers, isAchieved],
   );
   const pendingCount = totalCount - completedCount;
 
@@ -130,8 +158,11 @@ export const Statistics: React.FC = () => {
           (m.role || '').includes(keyword);
         if (!hit) return false;
       }
-      if (statusFilter === 'completed') return isAchieved(m);
-      if (statusFilter === 'need_backfill') return !isAchieved(m);
+      // ⭐ D31：两个状态筛选都排除「已暂停考核」的人（他们不计考核）
+      if (statusFilter === 'completed')
+        return m.enabled !== false && isAchieved(m);
+      if (statusFilter === 'need_backfill')
+        return m.enabled !== false && !isAchieved(m);
       return true;
     });
   }, [board, search, statusFilter, isAchieved]);
@@ -506,15 +537,27 @@ export const Statistics: React.FC = () => {
                       )}
 
                       <td className="py-3 px-4 text-right whitespace-nowrap">
-                        {achieved ? (
+                        {/* ⭐ D31 修复 4：暂停考核 -> 灰；达标 -> 绿；
+                            到点仍缺 -> 黄「待补录」；没到点 -> 蓝「未完成」 */}
+                        {m.enabled === false ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-300 text-[11px] font-bold">
+                            <CircleSlash className="w-3 h-3 text-slate-500" />
+                            已暂停考核
+                          </span>
+                        ) : achieved ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             今日达标
                           </span>
-                        ) : (
+                        ) : hasOverdue(m) ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-300 text-[11px] font-bold">
                             <AlertTriangle className="w-3 h-3 text-amber-600" />
                             待补录
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-bold">
+                            <Clock className="w-3 h-3 text-blue-500" />
+                            未完成
                           </span>
                         )}
                       </td>

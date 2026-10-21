@@ -227,9 +227,13 @@ export const GroupManagement: React.FC = () => {
     }
     // ⭐ 2026-10-20：打卡提醒时刻 = 各时段配置的提醒时间点（remind_at）；
     // times 仅为兼容保留字段，实际触发由 remind_at 决定（⛔ 不再用 start）
+    // ⭐ D31 修复 3（2026-10-21）：后端 `_validate_reminder_rules` 的 times
+    // 上限是 **5**（`test_reminder_per_biz.py` 锁死传 6 个必须 400），而
+    // 打卡时段允许 1~8 个 —— 原来写 `.slice(0, 6)`，配了 6~8 个时段的群
+    // 保存提醒规则必报 400。这里对齐后端上限。
     const checkinTimes = (slots.length ? slots : config?.checkin_slots || [])
       .map((slot) => slot.remind_at || slot.start)
-      .slice(0, 6);
+      .slice(0, 5);
     const patch = {
       reminder_rules: {
         checkin: { enabled: reminder.checkin, times: checkinTimes.length ? checkinTimes : ['09:00'] },

@@ -106,7 +106,18 @@ class MysqlPool:
                 conn.close()
             except Exception:
                 pass
-            conn = self._connect()
+            # ⭐ D31 修复 2（2026-10-21）：重连失败必须归还 `_created` 与
+            # `_borrowed`。此处已在上文 `_borrowed += 1`（借出计数），若
+            # `_connect()` 再抛错而直接冒泡，异常就发生在 `connection()` 的
+            # try/finally **之前** —— 两个计数永久泄漏，第 70 行的漂移自愈
+            # （要求 `_borrowed == 0`）永远不触发，5 次后连接池死锁到重启。
+            try:
+                conn = self._connect()
+            except BaseException:
+                with self._lock:
+                    self._created -= 1
+                    self._borrowed -= 1
+                raise
         return conn
 
     def _release(self, conn: pymysql.connections.Connection) -> None:

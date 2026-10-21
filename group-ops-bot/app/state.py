@@ -1275,19 +1275,38 @@ class StateStore:
 
     def rename_member_task(self, group_id: str, old_user_id: str,
                            new_user_id: str) -> None:
-        """改成员唯一标识（手机号）。⛔ 只改配置行，历史业务记录不动。"""
+        """改成员唯一标识（手机号）。⛔ 只改配置行，历史业务记录不动。
+
+        ⭐ D31 修复 5（2026-10-21）：三件事放进**同一个显式事务**：
+        1. 名单行改号
+        2. 白名单授权跟着人走 —— 用 ``UPDATE OR IGNORE``：若新号在本群
+           **已有同权限行**（比如换回旧手机号），直接 UPDATE 会撞
+           ``(group_id, user_id, permission_type)`` 主键抛 IntegrityError，
+           把改号变成 500；IGNORE 掉冲突行后再 ``DELETE`` 旧号残留，
+           保证「旧号一条不剩、新号最多一条」
+        3. 清旧号的 ``pending_session``（绑定输群名 / 实名两轮）——
+           不清的话旧号下次发文本会被当成「上一轮的答案」吞掉
+        ``with self._conn`` = 异常整体回滚，⛔ 不留「名单已改、授权没改」的半截状态。
+        """
         if old_user_id == new_user_id:
             return
-        self._conn.execute(
-            "UPDATE group_member_task_config SET user_id=?, updated_at=?"
-            " WHERE group_id=? AND user_id=?",
-            (new_user_id, utcnow_iso(), group_id, old_user_id))
-        # 白名单授权跟着人走（成员唯一标识变了，授权不能失联）
-        self._conn.execute(
-            "UPDATE export_whitelist SET user_id=?, updated_at=?"
-            " WHERE group_id=? AND user_id=?",
-            (new_user_id, utcnow_iso(), group_id, old_user_id))
-        self._conn.commit()
+        now_iso = utcnow_iso()
+        with self._conn:
+            self._conn.execute(
+                "UPDATE group_member_task_config SET user_id=?, updated_at=?"
+                " WHERE group_id=? AND user_id=?",
+                (new_user_id, now_iso, group_id, old_user_id))
+            # 白名单授权跟着人走（冲突行忽略，下一步统一清旧号）
+            self._conn.execute(
+                "UPDATE OR IGNORE export_whitelist SET user_id=?, updated_at=?"
+                " WHERE group_id=? AND user_id=?",
+                (new_user_id, now_iso, group_id, old_user_id))
+            self._conn.execute(
+                "DELETE FROM export_whitelist WHERE group_id=? AND user_id=?",
+                (group_id, old_user_id))
+            self._conn.execute(
+                "DELETE FROM pending_session WHERE group_id=? AND phone=?",
+                (group_id, old_user_id))
 
     def upsert_field(self, group_id: str, field_id: int, field_name: str,
                      unit: Optional[str], roles: list, enabled: bool,

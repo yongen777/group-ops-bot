@@ -188,6 +188,14 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
         ctx.state.record_security_event(
             "realname_phone_mismatch", ctx.group_id, ctx.phone,
             "registered phone differs from platform identity")
+    else:
+        # ⭐ D31 修复 5（2026-10-21）：号码与平台身份一致时，把姓名同步进
+        # 本地 `learned_user` —— 否则提醒/看板里同一个人的显示名会「实名写
+        # 的是真名、@ 时还是旧昵称」两套口径（learned_user 是展示名首选源）。
+        try:
+            ctx.state.learn_user(ctx.phone, name, ctx.platform_user_id)
+        except Exception:  # 展示名同步失败⛔ 不影响实名主流程与回执
+            pass
 
     ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)
     return success_text(name, phone)

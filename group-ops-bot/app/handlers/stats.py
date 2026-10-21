@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import io
 import logging
+import threading
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -72,6 +73,14 @@ SESSION_LABEL = {"am": "上午", "pm": "下午"}
 STATUS_LABEL = {"NORMAL": "按时", "LATE": "迟到", "ADMIN_EDIT": "后台补录"}
 SOURCE_LABEL = {"user": "群员", "admin": "管理员"}
 
+# ⭐ D31 修复 1（2026-10-21）：群内导出的**进程内互斥锁**。
+# 落盘文件名只按 `{biz}_{YYYYMMDD_HHMM}.xlsx` 命名（⛔ 不含 group_id，保持
+# 既有命名口径不动），而同一次上传+发送要 7~28 秒。两个群在同一分钟并发
+# 「导出」时，后写的一方会覆写磁盘上同名文件 → A 群收到 B 群的表（串表）。
+# 锁粒度 = 「生成三个文件 + 逐个发送」的整段：拿到锁的群做完三件再放行。
+# ⚠️ 单进程串行化，多个 uvicorn worker 时仍需按进程锁（本项目单进程双监听）。
+_EXPORT_LOCK = threading.Lock()
+
 
 def handle_command(parsed, ctx: HandlerContext) -> str:
     """「导出」入口：一键导出全部业务（打卡 / 总结 / 报数）——**各一个 XLSX**。
@@ -99,7 +108,6 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
         periods[biz] = period_k
 
     out_dir = Path(ctx.config.data_dir) / "exports"
-    out_dir.mkdir(parents=True, exist_ok=True)
     # 三个文件共用同一个时间戳，便于成组识别
     stamp = ctx.now.strftime("%Y%m%d_%H%M")
     sender = getattr(ctx.sender, "send_file", None)
@@ -114,16 +122,20 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
     # ⭐ 2026-10-20 用户指令：群若配成「免图直提」，凭证列整列不出现
     from . import checkin as checkin_handler
     require_image = checkin_handler.require_image(ctx)
-    for biz in commands.EXPORT_ALL_BIZS:
-        path = out_dir / (FILE_STEM % (biz, stamp) + ".xlsx")
-        path.write_bytes(build_export_workbook(
-            biz, summary_ptype, periods[biz], records[biz], slot_labels,
-            roster=roster, slots=slots, now=ctx.now,
-            require_image=require_image))
-        if _try_send_file(sender, ctx.group_id, path):
-            sent += 1
-        else:
-            failed += 1
+    # ⭐ D31 修复 1：落盘 + 发送整段加锁 —— 文件名不含 group_id，
+    # 多群同分钟并发会覆写同名文件、把别人的表发进本群（串表）。
+    with _EXPORT_LOCK:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for biz in commands.EXPORT_ALL_BIZS:
+            path = out_dir / (FILE_STEM % (biz, stamp) + ".xlsx")
+            path.write_bytes(build_export_workbook(
+                biz, summary_ptype, periods[biz], records[biz], slot_labels,
+                roster=roster, slots=slots, now=ctx.now,
+                require_image=require_image))
+            if _try_send_file(sender, ctx.group_id, path):
+                sent += 1
+            else:
+                failed += 1
 
     if failed == 0:
         return EXPORT_SENT_TEXT

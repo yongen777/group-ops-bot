@@ -456,7 +456,14 @@ def _today() -> str:
 
 
 def _achieve(member: dict, switches: dict, slots: list) -> str:
-    """全天综合达标判定：只算已开启业务。"""
+    """全天综合达标判定：只算已开启业务。
+
+    ⭐ D31 修复 4（2026-10-21）：**暂停考核**的成员不按「未打卡」记账 ——
+    他们本来就没有考核义务，写成「上午未打卡、总结未提交…」等于把人算成
+    缺勤。口径与看板 `enabled_total` 一致：
+    - 已暂停考核 + 各项都提交了 -> 仍判「今日达标」（记录真实完成情况）
+    - 已暂停考核 + 有缺项     -> **「已暂停考核」**（⛔ 不列缺项）
+    """
     pending = []
     if switches.get("checkin", True):
         for slot in slots:
@@ -467,7 +474,11 @@ def _achieve(member: dict, switches: dict, slots: list) -> str:
         pending.append("总结未提交")
     if switches.get("report", True) and not member.get("report"):
         pending.append("报数未提交")
-    return "今日达标" if not pending else "、".join(pending)
+    if not pending:
+        return "今日达标"
+    if member.get("enabled") is False:
+        return "已暂停考核"
+    return "、".join(pending)
 
 
 def board_rows(board: dict) -> tuple:

@@ -1248,6 +1248,12 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                                "（或今日打卡时段已结束）",
                     "summary": summary}
         suffix = "（%d 人处于 5 分钟冷却内，未重复打扰）" % cooled if cooled else ""
+        # ⭐ D31 修复 6（2026-10-21）：一条都没发出去时必须说清原因 ——
+        # 旧回执只说「发送 0 条」，管理员会以为「没人需要催」，
+        # 实际是群实例没绑推送地址 / 已停用（webhook 出站 fail-closed）。
+        if summary["unsent"] > 0 and summary["sent"] == 0:
+            suffix += ("；⚠️ 本轮 %d 条未送达（请检查群实例是否已绑定推送地址"
+                       "并启用）" % summary["unsent"])
         return {"ok": True,
                 "message": "已执行一轮%s提醒（新计划 %d 条，发送 %d 条）%s"
                            % (biz_label, summary["new"], summary["sent"],
