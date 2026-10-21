@@ -187,7 +187,7 @@ class TestExportReportDynamicFields:
             {"phone": PHONE, "name": "甲", "role": "开发",
              "items": [{"field_id": 2, "field_name": "代码行数",
                         "quantity": 500, "unit": "行"}]},
-            {"phone": "22644212510", "name": "乙", "role": "测试",
+            {"phone": "13800138010", "name": "乙", "role": "测试",
              "items": [{"field_id": 3, "field_name": "bug发现数",
                         "quantity": 7, "unit": None}]}]}
         reply = _run(tmp_db, backend)

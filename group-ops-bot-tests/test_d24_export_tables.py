@@ -24,7 +24,7 @@ from app.handlers import stats as stats_handler
 from doubles.fakes import FakeBackend
 from helpers import GROUP, PHONE, TZ, enable_all, make_config, make_ctx
 
-OTHER = "22644212511"
+OTHER = "13800138011"
 AM = datetime(2026, 10, 13, 10, 0, tzinfo=TZ)
 
 

@@ -8,7 +8,7 @@ from app.period import TZ
 
 NOW = datetime(2026, 10, 13, 10, 0, tzinfo=TZ)
 GROUP = "G100"
-PHONE = "22644212509"
+PHONE = "13800138009"
 
 
 class TestTokenStore:
@@ -102,7 +102,7 @@ class TestPendingSession:
         old = (NOW - timedelta(minutes=31)).isoformat(timespec="seconds")
         tmp_db._conn.execute(
             "UPDATE pending_session SET created_at=?, expires_at=? WHERE scope_key=?",
-            (old, old, "G100|22644212509|summary"))
+            (old, old, "G100|13800138009|summary"))
         tmp_db._conn.commit()
         assert tmp_db.get_pending_session(GROUP, PHONE, "summary", NOW) is None
 

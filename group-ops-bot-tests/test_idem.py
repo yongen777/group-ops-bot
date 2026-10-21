@@ -101,11 +101,11 @@ class TestIntegrityErrorClassification:
 
 class TestSanitizeInput:
     def test_forbidden_keys_stripped(self):
-        payload = {"phone": "22644212509", "token": "abc",
+        payload = {"phone": "13800138009", "token": "abc",
                    "password": "p", "image_ref": "img-1"}
         cleaned = _sanitize_input(payload)
         assert "abc" not in cleaned and '"p"' not in cleaned
-        assert "22644212509" in cleaned and "img-1" in cleaned
+        assert "13800138009" in cleaned and "img-1" in cleaned
 
 
 class TestExecutePaths:

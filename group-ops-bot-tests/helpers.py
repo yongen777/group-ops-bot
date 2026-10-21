@@ -20,8 +20,8 @@ from app.tokens import token_id_of  # noqa: E402
 
 TZ = ZoneInfo("Asia/Shanghai")
 GROUP = "G100"
-PHONE = "22644212509"
-OTHER_PHONE = "22644212510"
+PHONE = "13800138009"
+OTHER_PHONE = "13800138010"
 
 # 令牌提取（⛔ 不 split：链接话术带「30 分钟有效」尾注，split 会把尾注
 # 一起吞进令牌值；token_urlsafe 字符集 = A-Za-z0-9_-）

@@ -172,7 +172,7 @@ class TestBindTwoRoundOrder:
         client.post("/api/callback", json=payload("绑定", UNBOUND))
         resp = client.post("/api/callback",
                            json=payload("别人的群名", UNBOUND,
-                                        phone="22644212510"))
+                                        phone="13800138010"))
         # 别人：未绑定群 + 无等待会话 -> 统一引导话术（⛔ 不当群名）
         assert resp.json()["replied"] is True
         assert "本群尚未接入机器人" in sender.sent[-1]["text"]

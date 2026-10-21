@@ -22,7 +22,7 @@ from doubles.fakes import FakeBackend
 from helpers import GROUP, PHONE, TZ, enable_all
 
 NOW = datetime(2026, 10, 13, 10, 0, tzinfo=TZ)
-SCOPE = "G100|22644212509|checkin|2026-10-13|am"
+SCOPE = "G100|13800138009|checkin|2026-10-13|am"
 REQUEST_ID = "req-recovery-1"
 
 
@@ -183,7 +183,7 @@ class TestVerdictUnknown:
             "SELECT * FROM security_event WHERE event_type='recovery_escalated'"
         ).fetchone()
         assert event is not None and REQUEST_ID in event["detail"]
-        assert "22644212509" in event["phone"]
+        assert "13800138009" in event["phone"]
 
     def test_超龄_首次unknown即告警(self, tmp_db):
         enable_all(tmp_db)

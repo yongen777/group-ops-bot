@@ -42,6 +42,15 @@ const toMin = (value?: string): number | null => {
 };
 
 /**
+ * ⭐ D32（2026-10-21，巡检 P1-1）：群成员唯一标识 = 平台手机号。
+ *
+ * 巡检实测「12345」能被直接加进名单 → 产生无法 @、无法实名的假成员。
+ * 正则与后端 `_PHONE_RE` / 实名登记 / 群内绑定**同一条**：11 位大陆手机号。
+ */
+const PHONE_RE = /^1[3-9]\d{9}$/;
+const PHONE_INVALID_TEXT = '手机号格式不正确';
+
+/**
  * 提醒时间点边界校验（与后端 checkin.remind_at_error 同一口径）：
  * 必须满足 start < remind_at < end —— 08:00-08:30 的时段只能填 08:01~08:29。
  * 返回 null = 合法；留空（未配置）时后端按「结束前 5 分钟」补默认值。
@@ -117,6 +126,20 @@ export const GroupManagement: React.FC = () => {
       setLoading(false);
     }
   }, [selectedGroupId, loadConfig, loadMembers, loadGrants, loadFields, showToast]);
+
+  /**
+   * ⭐ D32（巡检 P1-3）：切到「授权群管理员」时**重新拉一次**成员与授权。
+   *
+   * 候选卡片 = 在岗成员 − 已授权，全部由这两份数据派生。原来只在进页面时
+   * `loadAll` 拉一次：若成员是在**别处**被删的（另一个标签页/另一位管理员，
+   * 或经接口直删），切过来仍会列出已删成员、点授权才被后端 400 拦住。
+   * 进 Tab 即刷新，保证「看到的候选就是现在能授权的」。
+   */
+  const openAdminsTab = useCallback(() => {
+    setSubView('admins');
+    void loadMembers();
+    void loadGrants();
+  }, [loadMembers, loadGrants]);
 
   useEffect(() => {
     loadAll();
@@ -278,8 +301,9 @@ export const GroupManagement: React.FC = () => {
       setMemberError('真实姓名是必填项，请输入成员真实姓名');
       return;
     }
-    if (!/^[0-9A-Za-z_-]{4,32}$/.test(userId)) {
-      setMemberError('请输入手机号码或用户标识（4~32 位数字/字母）');
+    if (!PHONE_RE.test(userId)) {
+      // ⭐ D32：原校验只要求 4~32 位数字/字母，把「12345」也放过
+      setMemberError(PHONE_INVALID_TEXT);
       return;
     }
     if (members.some((m) => m.user_id === userId)) {
@@ -323,8 +347,10 @@ export const GroupManagement: React.FC = () => {
       return;
     }
     const nextPhone = editPhone.trim();
-    if (!/^[0-9A-Za-z_-]{4,32}$/.test(nextPhone)) {
-      showToast('手机号码需为 4~32 位数字/字母', 'error');
+    // ⭐ D32：只在「号码变了」时校验 —— 历史遗留的非手机号成员改姓名时
+    // ⛔ 不该被强制顺手改号（改号有独立的业务代价：历史记录仍挂旧号）
+    if (nextPhone !== editingMember.user_id && !PHONE_RE.test(nextPhone)) {
+      showToast(PHONE_INVALID_TEXT, 'error');
       return;
     }
     try {
@@ -539,7 +565,7 @@ export const GroupManagement: React.FC = () => {
             <span>群成员 ({members.length})</span>
           </button>
           <button
-            onClick={() => setSubView('admins')}
+            onClick={openAdminsTab}
             className={`px-3.5 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
               subView === 'admins' ? 'bg-white font-bold text-blue-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
             }`}
@@ -1119,11 +1145,20 @@ export const GroupManagement: React.FC = () => {
                 </label>
                 <input
                   type="text"
+                  inputMode="numeric"
+                  maxLength={11}
                   placeholder="例如：13800000000"
                   value={newUserId}
                   onChange={(e) => {
                     setNewUserId(e.target.value);
                     if (memberError) setMemberError(null);
+                  }}
+                  onBlur={() => {
+                    // ⭐ D32：失焦即校验（⛔ 不等提交才报错）
+                    const value = newUserId.trim();
+                    if (value && !PHONE_RE.test(value)) {
+                      setMemberError(PHONE_INVALID_TEXT);
+                    }
                   }}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-blue-500 focus:bg-white text-xs font-mono"
                 />

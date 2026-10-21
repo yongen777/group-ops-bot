@@ -30,6 +30,11 @@ from . import board as board_mod
 from . import stats_export as stats_mod
 
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+# ⭐ D32（2026-10-21，巡检 P1-1）：群成员唯一标识 = 平台手机号，必须校验格式。
+# 巡检实测「12345」可被直接加进名单，产生无法 @、无法实名的假成员，
+# 且该员工永远收不到提醒。口径与实名登记 / 绑定同一条正则。
+_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+PHONE_INVALID_TEXT = "手机号格式不正确"
 _SLOT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
 _MAX_GROUP_ID = 64
 _MAX_NAME = 64
@@ -710,6 +715,9 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_csrf(request, identity)
         _group_row(state, group_id)
         user_id = _clean_str(body.get("user_id"), "用户标识", 32)
+        # ⭐ D32（巡检 P1-1）：手机号格式强校验（⛔ 只靠前端拦不算）
+        if not _PHONE_RE.match(user_id):
+            raise HTTPException(status_code=400, detail=PHONE_INVALID_TEXT)
         nickname = _clean_str(body.get("nickname"), "昵称", _MAX_NAME,
                               required=False)
         role = _clean_str(body.get("role"), "角色", _MAX_ROLE, required=False)
@@ -747,10 +755,11 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         if "new_user_id" in body:
             new_user_id = _clean_str(body.get("new_user_id"), "手机号码", 32)
             if new_user_id != user_id:
-                if not re.match(r"^[0-9A-Za-z_-]{4,32}$", new_user_id):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="手机号码需为 4~32 位数字/字母")
+                # ⭐ D32（巡检 P1-1）：改号同样必须是合法手机号 —— 否则
+                # 「新增时拦住了、编辑时又能改成 abc」等于留了后门。
+                if not _PHONE_RE.match(new_user_id):
+                    raise HTTPException(status_code=400,
+                                        detail=PHONE_INVALID_TEXT)
                 if any(r["user_id"] == new_user_id
                        for r in state.list_member_tasks(group_id)):
                     raise HTTPException(

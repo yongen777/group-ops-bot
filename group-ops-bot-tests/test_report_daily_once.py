@@ -95,7 +95,7 @@ class TestReportDailyOnce:
         backend, ctx, token = issue_report_token(tmp_db, AM)
         report_handler.submit_from_h5(
             ctx, token, [{"field_id": 1, "quantity": 3}])
-        other = ctx_at(tmp_db, backend, AM, phone="22644212510")
+        other = ctx_at(tmp_db, backend, AM, phone="13800138010")
         reply = report_handler.handle_command(commands.parse("报数"), other)
         assert "#t=" in reply
 

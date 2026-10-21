@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "group-ops-bot"))
 from app.state import StateStore  # noqa: E402
 
 GROUP = "G100"
-PHONE = "22644212509"
+PHONE = "13800138009"
 
 
 def main(db_path: str) -> None:

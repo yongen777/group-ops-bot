@@ -12,7 +12,7 @@ from app.tokens import (
     token_id_of,
 )
 
-PHONE = "22644212509"
+PHONE = "13800138009"
 GROUP = "G100"
 NOW = datetime(2026, 10, 13, 10, 0, tzinfo=TZ)
 
@@ -53,7 +53,7 @@ class TestAuthorization:
 
     def test_wrong_user_rejected(self):
         value, record = make_token()
-        assert check_authorization(record, value, "22644212510", GROUP, "report",
+        assert check_authorization(record, value, "13800138010", GROUP, "report",
                                    "2026-10-13", None, now=NOW) == RejectReason.WRONG_USER
 
     def test_wrong_group_rejected(self):

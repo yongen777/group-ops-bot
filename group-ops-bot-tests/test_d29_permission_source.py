@@ -97,13 +97,13 @@ class TestWhitelistSingleSource:
         """群内「绑定」只建群配置，⛔ 绝不写授权表（绑定 ≠ 群管理员）。"""
         config = make_config(Path(tmp_db.db_path).parent)
         ctx = make_ctx(tmp_db, None, config, group_id="G-BIND",
-                       phone="22644212509", text="绑定")
+                       phone="13800138009", text="绑定")
         first = bind_handler.handle_command(
             bind_handler.commands.parse("绑定"), ctx)
         assert "请输入要绑定的群名称" in first
         second = bind_handler.handle_pending_text_if_any(
             make_ctx(tmp_db, None, config, group_id="G-BIND",
-                     phone="22644212509", text="新群"))
+                     phone="13800138009", text="新群"))
         assert "绑定成功" in second
         assert tmp_db.get_group_config("G-BIND") is not None
         assert list(tmp_db.list_whitelist("G-BIND")) == []

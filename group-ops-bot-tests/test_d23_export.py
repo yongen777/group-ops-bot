@@ -29,7 +29,7 @@ from app.web.server import create_app
 from doubles.fakes import FakeBackend, RecordingSender
 from helpers import GROUP, PHONE, TZ, enable_all, make_config, make_ctx
 
-OTHER = "22644212510"
+OTHER = "13800138010"
 AM = datetime(2026, 10, 13, 10, 0, tzinfo=TZ)   # 落在 am 时段内（00:00-12:00）
 
 
