@@ -117,12 +117,31 @@ def success_text(name: str, phone: str) -> str:
         name, _mask(phone))
 
 
+def _roster_verdict(ctx: HandlerContext) -> Optional[bool]:
+    """本群名单里有没有这个人：True=在，False=不在，None=名单为空（未治理）。"""
+    try:
+        roster = ctx.state.list_member_tasks(ctx.group_id)
+    except Exception:
+        return None
+    if not roster:
+        return None
+    return any(row["user_id"] == ctx.phone for row in roster)
+
+
 def _registered_user(ctx: HandlerContext) -> Optional[dict]:
-    """人员目录里已有姓名 = 已实名过（实名登记写的就是 sys_user.name）。
+    """已实名判定 = **在本群名单里** 且 **人员目录有姓名**，缺一不可。
+
+    ⚠️ 2026-10-22 实测死循环（用户截图）：郑佳在别的群实名过 -> `sys_user.name`
+    有值，但他在**本群**被移除 -> 不在名单。于是「打卡」提示去实名，「实名」又
+    回「已完成登记」-> 他既进不了名单、也补不了登记，**永远卡死**。
+    故增加前置：明确不在本群名单 -> 视为未实名，放行实名流程（登记成功会自动
+    入册，见 handle_pending_text 的成功分支）。
 
     ⚠️ 后端不可用时返回 None（⛔ 不拦）：宁可让用户重走一遍登记，
     也不把正常登记路径堵死。
     """
+    if _roster_verdict(ctx) is False:
+        return None
     try:
         user = ctx.backend.user_get(phone=ctx.phone).get("user")
     except Exception:  # 后端不可达：不据此拦截

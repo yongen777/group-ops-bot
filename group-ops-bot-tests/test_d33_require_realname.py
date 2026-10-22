@@ -154,3 +154,37 @@ class TestTextAndSideEffects:
         _say(client, "总结")
         assert tmp_db.get_pending_session(GROUP, PHONE, "summary", NOW) is None
         assert not [c for c in backend.calls if c[0] == "summary_save"]
+
+
+# ---------- 6. 死循环回归（2026-10-22 实测：不在名单但已实名过 -> 卡死） ----------
+
+class TestDeadLoop:
+    def test_not_in_roster_can_start_realname(self, tmp_db):
+        """不在本群名单时，「实名」必须放行 —— 否则「打卡要实名 / 实名说已完成」死循环。"""
+        client, backend, sender = _client(tmp_db, roster=["13800138099"])
+        backend.results["user_get"] = {
+            "user": {"id": 7, "phone": PHONE, "name": "郑佳"}}
+        _say(client, "实名")
+        assert _last_text(sender) == realname_handler.ASK_TEXT
+
+    def test_after_realname_already_registered(self, tmp_db):
+        """入册 + 有姓名之后，再发「实名」才回「已完成登记」。"""
+        client, backend, sender = _client(tmp_db, roster=["13800138099"])
+        tmp_db.put_pending_session(GROUP, PHONE, "realname", None, NOW)
+        _say(client, "张三 13800138009")
+        assert tmp_db.get_member_task(GROUP, PHONE) is not None
+        backend.results["user_get"] = {
+            "user": {"id": 7, "phone": PHONE, "name": "张三"}}
+        _say(client, "实名")
+        assert _last_text(sender).startswith("您已完成实名登记")
+
+    def test_full_loop_unblocks_business(self, tmp_db):
+        """完整闭环：被拦 -> 实名 -> 入册 -> 打卡放行（不再提示实名）。"""
+        client, backend, sender = _client(tmp_db, roster=["13800138099"])
+        _say(client, "打卡")
+        assert _last_text(sender) == realname_handler.REQUIRE_REALNAME_TEXT
+        _say(client, "实名")
+        assert _last_text(sender) == realname_handler.ASK_TEXT
+        _say(client, "张三 13800138009")
+        _say(client, "打卡")
+        assert _last_text(sender) != realname_handler.REQUIRE_REALNAME_TEXT
