@@ -26,6 +26,7 @@ import re
 from typing import Optional
 
 from .. import commands
+from . import report as report_handler
 from .base import HandlerContext
 
 BIZ = "realname"
@@ -61,8 +62,10 @@ EXPIRED_TEXT = ("实名登记等待已超时（%d 分钟无操作）已结束，
                 "请重新发送「实名」。" % TTL_MINUTES)
 
 # ⭐ D33（2026-10-22 用户指令）：群内业务命令的**前置校验** ——
-# 「后台是否已录入该用户（= 已实名）」，未录入就提示先做实名，⛔ 不执行业务。
-# ⚠️ 用户明确要求**默认常开**：⛔ 不设群级开关，固定生效。
+# 「后台是否录入该用户」，用户口径原话：**「这个群成员就是用户实名」**。
+# 因此判定真源 = 本群成员名单（`group_member_task_config`），⛔ 不再查
+# MySQL `sys_user.name`（那是另一个人工维护的口径，和名单会打架）。
+# ⚠️ 默认常开：⛔ 不设群级开关，固定生效。
 REQUIRE_REALNAME_TEXT = (
     "⚠️ 系统里还没有您的实名信息，暂时无法使用该功能。\n"
     "请先发送「@机器人 实名」完成登记（姓名 + 手机号），登记成功后即可正常使用。")
@@ -73,20 +76,22 @@ GATED_COMMANDS = (commands.CMD_CHECKIN, commands.CMD_SUMMARY,
 
 
 def registered_state(ctx: HandlerContext) -> Optional[bool]:
-    """人员目录里是否已录入该用户（= 已实名）。
+    """本群名单里是否已录入该用户（用户口径：**名单 = 实名花名册**）。
 
-    True  = 已录入且有姓名
-    False = 未录入 / 无姓名（需要引导实名）
-    None  = 后端不可用 —— 调用方⛔ 不得据此拦截（fail-open，见 §4.11.4）
+    True  = 在名单中（已录入 / 已实名）
+    False = 不在名单（需要引导实名，实名成功后会自动进名单）
+    None  = 查询异常 —— 调用方⛔ 不得据此拦截（fail-open）
+
+    ⚠️ **名单为空 = 该群还没开始治理**，此时⛔ 不拦（否则新接入的群会把所有
+    人挡在门外，管理员还得先手工建一遍名单才能验收）。
     """
     try:
-        payload = ctx.backend.user_get(phone=ctx.phone) or {}
+        roster = ctx.state.list_member_tasks(ctx.group_id)
     except Exception:
         return None
-    user = payload.get("user")
-    if not user:
-        return False
-    return bool((user.get("name") or "").strip())
+    if not roster:
+        return True
+    return any(row["user_id"] == ctx.phone for row in roster)
 
 
 def blocks_business(ctx: HandlerContext, parsed) -> bool:
@@ -207,7 +212,7 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
                             platform_user_id=ctx.platform_user_id,
                             source="manual", group_id=ctx.group_id)
 
-    # 名单里已有该成员时同步姓名（⛔ 不新建名单行：应交人员归管理员维护）
+    # 名单里已有该成员时同步姓名（已存在行只改名，⛔ 不动 enabled/role）
     member = ctx.state.get_member_task(ctx.group_id, ctx.phone)
     if member is not None:
         ctx.state.upsert_member_task(
@@ -216,6 +221,14 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
             role=member["role"],
             enabled=bool(member["enabled"]),
             source=member["source"] or "manual")
+    else:
+        # ⭐ D33 口径变更（2026-10-22 用户指令）：「群成员名单 = 实名花名册」。
+        # 实名成功即把人**加入本群名单**（否则「不在名单 -> 提示实名 -> 实名
+        # 又不进名单」会死循环，用户永远解不开）。
+        ctx.state.upsert_member_task(
+            ctx.group_id, ctx.phone, nickname=name,
+            role=report_handler.DEFAULT_ROLE, enabled=True,
+            source="realname")
 
     # 解析出的手机号与平台身份不一致：如实留痕（⛔ 不拦，业务记录仍按平台身份）
     if phone != ctx.phone:
