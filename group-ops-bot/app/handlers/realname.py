@@ -61,6 +61,11 @@ ALREADY_REGISTERED_TEXT = ("您已完成实名登记（姓名：{name}，手机�
 
 CANCELED_TEXT = "已取消实名登记。"
 
+# ⭐ D36：实名填了别人的号（人员目录里已有别人的姓名）—— ⛔ 不覆盖、不合并
+PHONE_TAKEN_TEXT = (
+    "⚠️ 该手机号已被其他人员登记，无法重复实名。\n"
+    "请填写「本人」的手机号重新提交（格式：姓名 手机号），如需申诉请联系管理员。")
+
 EXPIRED_TEXT = ("实名登记等待已超时（%d 分钟无操作）已结束，"
                 "请重新发送「实名」。" % TTL_MINUTES)
 
@@ -141,6 +146,27 @@ def registered_state(ctx: HandlerContext) -> Optional[bool]:
     if any(row["user_id"] == ctx.phone for row in roster):
         return True
     return _auto_heal_into_roster(ctx)
+
+
+def _phone_conflict(ctx: HandlerContext, phone: str) -> Optional[dict]:
+    """该手机号是否已被**别人**实名占用（单人单号口径）。
+
+    返回占用者 dict 表示冲突；None 表示可用：
+    - 号码就是自己的平台身份 -> 不冲突（本人补登记）
+    - 目录里有该号但姓名为空 -> 不冲突（历史遗留，可补录）
+    - 后端不可用 -> None（fail-open，⛔ 不因抖动挡住实名）
+    """
+    if phone == ctx.phone:
+        return None
+    try:
+        user = (ctx.backend.user_get(phone=phone) or {}).get("user")
+    except Exception:
+        return None
+    if not user:
+        return None
+    if not (user.get("name") or "").strip():
+        return None
+    return user
 
 
 def blocks_business(ctx: HandlerContext, parsed) -> bool:
@@ -290,6 +316,20 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
         # ⛔ 保留会话：用户可直接重发，不必再发一次「实名」
         return FORMAT_ERROR_TEXT
     name, phone = parsed
+
+    # ⭐ D36（2026-10-22 用户指令）：实名也要防撞号（单人单号）。
+    # 若输入的号码在人员目录里**已经有别人的姓名**，直接拒绝并留痕 ——
+    # ⛔ 绝不能 upsert，否则会把别人的姓名覆盖掉（比名单撞号更严重）。
+    conflict = _phone_conflict(ctx, phone)
+    if conflict is not None:
+        try:
+            ctx.state.add_phone_conflict(
+                ctx.group_id, phone, "realname",
+                "attempted_by=%s; owner=%s" % (ctx.phone,
+                                               conflict.get("name") or "?"))
+        except Exception:
+            LOG.exception("record phone conflict failed")
+        return PHONE_TAKEN_TEXT
 
     # 写人员目录（按解析出的手机号 upsert；platform_user_id 一并绑定）
     ctx.backend.user_upsert(phone=phone, name=name,

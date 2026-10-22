@@ -180,6 +180,17 @@ CREATE TABLE IF NOT EXISTS group_member_task_config (
     PRIMARY KEY (group_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS member_phone_conflict (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id    TEXT NOT NULL,
+    phone       TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    detail      TEXT,
+    created_at  TEXT NOT NULL,
+    resolved_at TEXT,
+    resolved_by TEXT
+);
+
 CREATE TABLE IF NOT EXISTS group_member_removed (
     group_id   TEXT NOT NULL,
     user_id    TEXT NOT NULL,
@@ -425,7 +436,7 @@ class StateStore:
         row = conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()
         version = int(row["value"]) if row else 0
-        if version >= 12:
+        if version >= 13:
             return
 
         # ---- v2 -> v3：submit_intent.token_id + recovery_task 查证计数 ----
@@ -654,6 +665,18 @@ class StateStore:
             " removed_at TEXT NOT NULL, PRIMARY KEY (group_id, user_id))")
         conn.execute(
             "UPDATE meta SET value=? WHERE key='schema_version'", ("12",))
+        conn.commit()
+
+        # ---- v12 -> v13：member_phone_conflict（⭐ D36 撞号待办）----
+        # 改号跨群撞号 / 实名填了别人的号 -> 落一条待办，后台「群成员」顶部提示，
+        # 管理员核对后点「已处理」。⛔ 不用审计流水当待办（没法标记处理状态）。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS member_phone_conflict ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, group_id TEXT NOT NULL,"
+            " phone TEXT NOT NULL, kind TEXT NOT NULL, detail TEXT,"
+            " created_at TEXT NOT NULL, resolved_at TEXT, resolved_by TEXT)")
+        conn.execute(
+            "UPDATE meta SET value=? WHERE key='schema_version'", ("13",))
         conn.commit()
 
     def _new_conn(self) -> sqlite3.Connection:
@@ -1261,6 +1284,48 @@ class StateStore:
             "DELETE FROM group_member_removed WHERE group_id=? AND user_id=?",
             (group_id, user_id))
         self._conn.commit()
+
+    # ---------- 手机号撞号待办（⭐ D36） ----------
+
+    def add_phone_conflict(self, group_id: str, phone: str, kind: str,
+                           detail: str = "") -> int:
+        """记一条撞号待办（同群同号同类型未处理时不重复堆叠）。
+
+        kind: rename（改号撞号）/ realname（实名填了别人的号）
+        """
+        existing = self._conn.execute(
+            "SELECT id FROM member_phone_conflict WHERE group_id=? AND phone=?"
+            " AND kind=? AND resolved_at IS NULL", (group_id, phone, kind)
+        ).fetchone()
+        if existing:
+            self._conn.execute(
+                "UPDATE member_phone_conflict SET detail=?, created_at=?"
+                " WHERE id=?", (detail, utcnow_iso(), existing["id"]))
+            self._conn.commit()
+            return int(existing["id"])
+        cur = self._conn.execute(
+            "INSERT INTO member_phone_conflict(group_id, phone, kind, detail,"
+            " created_at) VALUES(?,?,?,?,?)",
+            (group_id, phone, kind, detail, utcnow_iso()))
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def list_phone_conflicts(self, group_id: str,
+                             only_open: bool = True) -> list:
+        sql = ("SELECT * FROM member_phone_conflict WHERE group_id=?"
+               + (" AND resolved_at IS NULL" if only_open else "")
+               + " ORDER BY id DESC")
+        return self._conn.execute(sql, (group_id,)).fetchall()
+
+    def resolve_phone_conflict(self, group_id: str, conflict_id: int,
+                               by: str = "admin") -> bool:
+        """标记已处理（幂等）；返回是否命中未处理记录。"""
+        cur = self._conn.execute(
+            "UPDATE member_phone_conflict SET resolved_at=?, resolved_by=?"
+            " WHERE id=? AND group_id=? AND resolved_at IS NULL",
+            (utcnow_iso(), by, conflict_id, group_id))
+        self._conn.commit()
+        return cur.rowcount > 0
 
     def delete_group_cascade(self, group_id: str) -> dict:
         """彻底移除群接入（2026-10-19 用户指令「移除群聊」）。

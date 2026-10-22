@@ -356,9 +356,15 @@ class TestRealnameSyncsLearnedUser:
         assert tmp_db.user_display_name(REAL_PHONE) == "张三"
 
     def test_mismatched_phone_does_not_touch_learned_name(self, tmp_db):
-        """手机号与平台身份不一致 -> ⛔ 不改本地展示名（只留安全事件）。"""
+        """手机号与平台身份不一致 -> ⛔ 不改本地展示名（只留安全事件）。
+
+        ⚠️ D36（2026-10-22 单人单号）：填**别人已占用**的号会被直接拒绝，
+        所以这里必须让目标号在目录里没有姓名，才能测到"号码不一致但不撞号"。
+        """
         enable_all(tmp_db)
-        ctx = make_ctx(tmp_db, FakeBackend(),
+        backend = FakeBackend()
+        backend.results["user_get"] = {"user": None}
+        ctx = make_ctx(tmp_db, backend,
                        make_config(Path(str(tmp_db.db_path)).parent),
                        now=NOW, phone=REAL_PHONE)
         tmp_db.put_pending_session(GROUP, REAL_PHONE, realname_handler.BIZ,

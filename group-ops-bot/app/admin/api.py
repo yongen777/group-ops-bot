@@ -786,6 +786,12 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                 # 只改当前群会让他在别的群变成另一个人）
                 rename_result = state.rename_member_all_groups(user_id,
                                                                new_user_id)
+                # ⭐ D36：跨群撞号 -> 落一条待办，后台「群成员」顶部可见
+                if rename_result["conflicts"]:
+                    state.add_phone_conflict(
+                        group_id, new_user_id, "rename",
+                        "以下群已存在该号码，未自动合并：%s"
+                        % "、".join(rename_result["conflicts"]))
                 user_id = new_user_id
         state.upsert_member_task(group_id, user_id, nickname=nickname,
                                  role=role, enabled=enabled)
@@ -817,6 +823,37 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                "%s/%s" % (group_id, user_id),
                {"note": "停止未来任务；历史业务记录保留；导出授权级联失效；"
                         "标记移除痕迹（自愈不再复活）"})
+        return {"ok": True}
+
+    # ---------- 手机号撞号待办（⭐ D36） ----------
+
+    @router.get("/groups/{group_id}/member-conflicts")
+    def list_member_conflicts(group_id: str, request: Request):
+        """本群未处理的撞号待办（后端「群成员」页顶部提示条用）。"""
+        identity = _identity(request, state)
+        _require_password_changed(identity)
+        _group_row(state, group_id)
+        rows = state.list_phone_conflicts(group_id, only_open=True)
+        return {"conflicts": [
+            {"id": r["id"], "phone": r["phone"], "kind": r["kind"],
+             "detail": r["detail"] or "", "created_at": r["created_at"]}
+            for r in rows]}
+
+    @router.post("/groups/{group_id}/member-conflicts/{conflict_id}/resolve")
+    def resolve_member_conflict(group_id: str, conflict_id: int,
+                                request: Request):
+        """标记撞号待办已处理（人工核对完成后点）。"""
+        identity = _identity(request, state)
+        _require_password_changed(identity)
+        _require_csrf(request, identity)
+        _group_row(state, group_id)
+        ok = state.resolve_phone_conflict(group_id, conflict_id,
+                                          by=getattr(identity, "username",
+                                                     "admin"))
+        if not ok:
+            raise HTTPException(status_code=404, detail="该待办不存在或已处理")
+        _audit(state, request, identity, "member.conflict_resolve", "member",
+               "%s/%s" % (group_id, conflict_id), {})
         return {"ok": True}
 
     # ---------- 导出白名单（2026-10-19 用户指令：单权化）----------

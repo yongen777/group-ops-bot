@@ -50,6 +50,15 @@ const toMin = (value?: string): number | null => {
 const PHONE_RE = /^1[3-9]\d{9}$/;
 const PHONE_INVALID_TEXT = '手机号格式不正确';
 
+/** ⭐ D36：手机号撞号待办（单人单号口径下的数据异常） */
+interface PhoneConflict {
+  id: number;
+  phone: string;
+  kind: 'rename' | 'realname' | string;
+  detail: string;
+  created_at: string;
+}
+
 /**
  * 提醒时间点边界校验（与后端 checkin.remind_at_error 同一口径）：
  * 必须满足 start < remind_at < end —— 08:00-08:30 的时段只能填 08:01~08:29。
@@ -77,6 +86,7 @@ export const GroupManagement: React.FC = () => {
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [grants, setGrants] = useState<AdminGrant[]>([]);
   const [fields, setFields] = useState<ReportField[]>([]);
+  const [phoneConflicts, setPhoneConflicts] = useState<PhoneConflict[]>([]);
 
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToast({ text, type });
@@ -99,6 +109,25 @@ export const GroupManagement: React.FC = () => {
     setMembers(data.members || []);
   }, [selectedGroupId]);
 
+  /**
+   * ⭐ D36（2026-10-22 用户指令）：手机号撞号待办。
+   *
+   * 单人单号口径下，撞号 = 数据出问题（改号撞到别群的人 / 实名填了别人的号）。
+   * 后端只在操作瞬间弹一次 toast，关掉就没了，所以这里做成**持久提示条**，
+   * 管理员核对完点「已处理」才消失。
+   */
+  const loadPhoneConflicts = useCallback(async () => {
+    if (!selectedGroupId) return;
+    try {
+      const data = await api.get<{ conflicts: PhoneConflict[] }>(
+        `/api/admin/groups/${gid(selectedGroupId)}/member-conflicts`,
+      );
+      setPhoneConflicts(data.conflicts || []);
+    } catch {
+      setPhoneConflicts([]);          // 取不到⛔ 不影响主流程
+    }
+  }, [selectedGroupId]);
+
   const loadGrants = useCallback(async () => {
     if (!selectedGroupId) return;
     const data = await api.get<{ ok: boolean; whitelist: AdminGrant[] }>(
@@ -119,13 +148,15 @@ export const GroupManagement: React.FC = () => {
     if (!selectedGroupId) return;
     setLoading(true);
     try {
-      await Promise.all([loadConfig(), loadMembers(), loadGrants(), loadFields()]);
+      await Promise.all([loadConfig(), loadMembers(), loadGrants(),
+                         loadFields(), loadPhoneConflicts()]);
     } catch (err: any) {
       showToast(err?.message || '数据加载失败，请刷新页面重试', 'error');
     } finally {
       setLoading(false);
     }
-  }, [selectedGroupId, loadConfig, loadMembers, loadGrants, loadFields, showToast]);
+  }, [selectedGroupId, loadConfig, loadMembers, loadGrants, loadFields,
+      loadPhoneConflicts, showToast]);
 
   /**
    * ⭐ D32（巡检 P1-3）：切到「授权群管理员」时**重新拉一次**成员与授权。
@@ -370,6 +401,7 @@ export const GroupManagement: React.FC = () => {
       setEditingMember(null);
       await loadMembers();
       await loadGrants();
+      await loadPhoneConflicts();
       const renamed = result.user_id !== editingMember.user_id;
       const conflictCount = result.conflict_groups?.length || 0;
       if (renamed && conflictCount > 0) {
@@ -388,6 +420,19 @@ export const GroupManagement: React.FC = () => {
     }
   };
 
+  /** ⭐ D36：标记撞号待办已处理（人工核对完点） */
+  const resolvePhoneConflict = async (id: number) => {
+    try {
+      await api.post(
+        `/api/admin/groups/${gid(selectedGroupId)}/member-conflicts/${id}/resolve`, {},
+      );
+      await loadPhoneConflicts();
+      showToast('已标记为处理完毕');
+    } catch (err: any) {
+      showToast(err?.message || '操作未成功', 'error');
+    }
+  };
+
   const removeMember = async () => {
     if (!deletingMember) return;
     try {
@@ -398,6 +443,7 @@ export const GroupManagement: React.FC = () => {
       setDeletingMember(null);
       await loadMembers();
       await loadGrants();
+      await loadPhoneConflicts();
       await refreshGroups();
     } catch (err: any) {
       showToast(err?.message || '移除未成功', 'error');
@@ -1121,6 +1167,37 @@ export const GroupManagement: React.FC = () => {
 
       {subView === 'members' && (
         <div className="space-y-5">
+          {phoneConflicts.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span>有 {phoneConflicts.length} 条手机号撞号待处理</span>
+                <span className="font-normal text-amber-700">
+                  （单人单号，撞号说明数据有冲突，系统未自动合并）
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {phoneConflicts.map((c) => (
+                  <div key={c.id}
+                       className="flex items-start justify-between gap-3 bg-white/70 border border-amber-200 rounded-xl px-3 py-2">
+                    <div className="text-[11px] text-amber-900 leading-relaxed">
+                      <span className="font-mono font-semibold">{c.phone}</span>
+                      <span className="mx-1.5 text-amber-400">·</span>
+                      <span>{c.kind === 'realname' ? '实名填了已被占用的号' : '改号撞到别群的人'}</span>
+                      <div className="text-amber-700">{c.detail}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => resolvePhoneConflict(c.id)}
+                      className="shrink-0 px-2.5 py-1 text-[11px] font-semibold text-amber-800 bg-white border border-amber-300 hover:bg-amber-100 rounded-lg cursor-pointer"
+                    >
+                      标记已处理
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 space-y-3">
             <h3 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
               <UserPlus className="w-4 h-4 text-blue-600" />
