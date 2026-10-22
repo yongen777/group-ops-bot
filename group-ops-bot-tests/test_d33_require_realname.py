@@ -188,3 +188,64 @@ class TestDeadLoop:
         _say(client, "张三 13800138009")
         _say(client, "打卡")
         assert _last_text(sender) != realname_handler.REQUIRE_REALNAME_TEXT
+
+
+# ---------- 7. D34 全局档案静默自愈入册（2026-10-22 用户指令） ----------
+
+class TestAutoHeal:
+    def _heal_client(self, tmp_db):
+        """名单里有别人（非空）、群里的人全局已实名 -> 触发静默入册。"""
+        client, backend, sender = _client(tmp_db, roster=["13800138099"])
+        backend.results["user_get"] = {
+            "user": {"id": 7, "phone": PHONE, "name": "郑佳"}}
+        return client, backend, sender
+
+    def test_heals_and_passes_silently(self, tmp_db):
+        """分支 A：全局有姓名 -> 静默入册 + 无感放行，⛔ 不出现实名话术。"""
+        client, _b, sender = self._heal_client(tmp_db)
+        assert tmp_db.get_member_task(GROUP, PHONE) is None
+        _say(client, "打卡")
+        assert _last_text(sender) != realname_handler.REQUIRE_REALNAME_TEXT
+        row = tmp_db.get_member_task(GROUP, PHONE)
+        assert row is not None, "应静默补录进本群名单"
+        assert row["nickname"] == "郑佳"
+        assert bool(row["enabled"]) is True
+        assert row["source"] == "auto_heal"
+
+    def test_heals_only_once(self, tmp_db):
+        """第二次命令走命中分支，⛔ 不重复写库。"""
+        client, _b, _s = self._heal_client(tmp_db)
+        _say(client, "打卡")
+        first = tmp_db.get_member_task(GROUP, PHONE)["updated_at"]
+        _say(client, "打卡")
+        assert tmp_db.get_member_task(GROUP, PHONE)["updated_at"] == first
+
+    def test_pure_new_user_still_blocked(self, tmp_db):
+        """分支 B：两处都没有姓名 -> 照旧拦截并引导实名。"""
+        client, backend, sender = _client(tmp_db, roster=["13800138099"])
+        backend.results["user_get"] = {"user": None}
+        _say(client, "打卡")
+        assert _last_text(sender) == realname_handler.REQUIRE_REALNAME_TEXT
+        assert tmp_db.get_member_task(GROUP, PHONE) is None
+
+    def test_empty_roster_does_not_heal(self, tmp_db):
+        """名单为空的群（未治理）放行但⛔ 不入册，避免凭空写成员。"""
+        client, backend, sender = _client(tmp_db)   # 空名单
+        backend.results["user_get"] = {"user": {"id": 7, "name": "郑佳"}}
+        _say(client, "打卡")
+        assert _last_text(sender) != realname_handler.REQUIRE_REALNAME_TEXT
+        assert tmp_db.get_member_task(GROUP, PHONE) is None
+
+    def test_visible_in_admin_members_api(self, tmp_db):
+        """自愈后，后台 `GET /api/admin/groups/{gid}/members` 立即可见。"""
+        from test_d32_member_phone_guard import _ready
+        admin = _ready(tmp_db)                      # 建号 + 登录 + 建群
+        client, backend, _s = _client(tmp_db, roster=["13800138099"])
+        backend.results["user_get"] = {
+            "user": {"id": 7, "phone": PHONE, "name": "郑佳"}}
+        _say(client, "打卡")
+        body = admin.get("/api/admin/groups/%s/members" % GROUP).json()
+        ids = [m["user_id"] for m in body["members"]]
+        assert PHONE in ids, "后台群成员接口应能立刻看到自愈补录的人"
+        me = [m for m in body["members"] if m["user_id"] == PHONE][0]
+        assert me["nickname"] == "郑佳" and me["enabled"] is True

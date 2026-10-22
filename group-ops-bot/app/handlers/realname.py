@@ -22,12 +22,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Optional
 
 from .. import commands
 from . import report as report_handler
 from .base import HandlerContext
+
+LOG = logging.getLogger(__name__)
 
 BIZ = "realname"
 
@@ -75,15 +78,48 @@ GATED_COMMANDS = (commands.CMD_CHECKIN, commands.CMD_SUMMARY,
                   commands.CMD_REPORT)
 
 
-def registered_state(ctx: HandlerContext) -> Optional[bool]:
-    """本群名单里是否已录入该用户（用户口径：**名单 = 实名花名册**）。
+def _auto_heal_into_roster(ctx: HandlerContext) -> Optional[bool]:
+    """⭐ D34（2026-10-22 用户指令）：**全局档案静默自愈入册**。
 
-    True  = 在名单中（已录入 / 已实名）
-    False = 不在名单（需要引导实名，实名成功后会自动进名单）
+    本群名单没有这个人 -> 去全局档案（MySQL `sys_user`，走 MCP `user.get`）查：
+    - 有姓名：**静默写进本群名单**（`source='auto_heal'`）并**无感放行**本次业务；
+    - 没有/查不到：返回 False（由调用方拦截并引导实名）；
+    - 后端不可用：返回 None（fail-open，⛔ 不因抖动挡业务）。
+
+    动机：管理员误删名单、或跨群已实名的人，此前会被「打卡要实名 / 实名说已完成」
+    互锁死。自愈后一条命令就把他补回册，后台「群成员」里立刻可见。
+    """
+    try:
+        user = (ctx.backend.user_get(phone=ctx.phone) or {}).get("user")
+    except Exception:
+        return None
+    if not user:
+        return False
+    name = (user.get("name") or "").strip()
+    if not name:
+        return False
+    try:
+        ctx.state.upsert_member_task(
+            ctx.group_id, ctx.phone, nickname=name,
+            role=report_handler.DEFAULT_ROLE, enabled=True,
+            source="auto_heal")
+    except Exception:  # 入册失败⛔ 不拦人：让业务照常，下次再补
+        LOG.exception("auto_heal into roster failed: group=%s", ctx.group_id)
+        return True
+    LOG.info("auto-healed %s(%s) into group %s roster",
+             name, ctx.phone, ctx.group_id)
+    return True
+
+
+def registered_state(ctx: HandlerContext) -> Optional[bool]:
+    """本群名单里是否已录入该用户；未录入时尝试**全局档案自愈**。
+
+    True  = 在名单 / 已自愈入册（无感放行）
+    False = 名单没有、全局档案也没有姓名（拦截并引导实名）
     None  = 查询异常 —— 调用方⛔ 不得据此拦截（fail-open）
 
-    ⚠️ **名单为空 = 该群还没开始治理**，此时⛔ 不拦（否则新接入的群会把所有
-    人挡在门外，管理员还得先手工建一遍名单才能验收）。
+    ⚠️ **名单为空 = 该群还没开始治理**：直接放行且⛔ 不入册
+    （不给未启用名单的群凭空写一堆成员）。
     """
     try:
         roster = ctx.state.list_member_tasks(ctx.group_id)
@@ -91,7 +127,9 @@ def registered_state(ctx: HandlerContext) -> Optional[bool]:
         return None
     if not roster:
         return True
-    return any(row["user_id"] == ctx.phone for row in roster)
+    if any(row["user_id"] == ctx.phone for row in roster):
+        return True
+    return _auto_heal_into_roster(ctx)
 
 
 def blocks_business(ctx: HandlerContext, parsed) -> bool:
