@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from .. import commands
 from .base import HandlerContext
 
 BIZ = "realname"
@@ -58,6 +59,39 @@ CANCELED_TEXT = "已取消实名登记。"
 
 EXPIRED_TEXT = ("实名登记等待已超时（%d 分钟无操作）已结束，"
                 "请重新发送「实名」。" % TTL_MINUTES)
+
+# ⭐ D33（2026-10-22 用户指令）：群内业务命令的**前置校验** ——
+# 「后台是否已录入该用户（= 已实名）」，未录入就提示先做实名，⛔ 不执行业务。
+# ⚠️ 用户明确要求**默认常开**：⛔ 不设群级开关，固定生效。
+REQUIRE_REALNAME_TEXT = (
+    "⚠️ 系统里还没有您的实名信息，暂时无法使用该功能。\n"
+    "请先发送「@机器人 实名」完成登记（姓名 + 手机号），登记成功后即可正常使用。")
+
+# 受该闸门约束的业务命令（导出走后白名单权限、帮助不拦、绑定/实名本身不拦）
+GATED_COMMANDS = (commands.CMD_CHECKIN, commands.CMD_SUMMARY,
+                  commands.CMD_REPORT)
+
+
+def registered_state(ctx: HandlerContext) -> Optional[bool]:
+    """人员目录里是否已录入该用户（= 已实名）。
+
+    True  = 已录入且有姓名
+    False = 未录入 / 无姓名（需要引导实名）
+    None  = 后端不可用 —— 调用方⛔ 不得据此拦截（fail-open，见 §4.11.4）
+    """
+    try:
+        payload = ctx.backend.user_get(phone=ctx.phone) or {}
+    except Exception:
+        return None
+    user = payload.get("user")
+    if not user:
+        return False
+    return bool((user.get("name") or "").strip())
+
+
+def blocks_business(ctx: HandlerContext, parsed) -> bool:
+    """该命令是否要先过实名校验（常开，⛔ 无开关可关）。"""
+    return getattr(parsed, "command", None) in GATED_COMMANDS
 
 _PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 # 姓名：2~20 位汉字（允许少数民族姓名的间隔号）或纯英文字母
