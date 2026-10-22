@@ -180,6 +180,13 @@ CREATE TABLE IF NOT EXISTS group_member_task_config (
     PRIMARY KEY (group_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS group_member_removed (
+    group_id   TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    removed_at TEXT NOT NULL,
+    PRIMARY KEY (group_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS report_field_pool (
     group_id   TEXT NOT NULL,
     field_id   INTEGER NOT NULL,                    -- 机器人侧字段 id（不透明引用，§4.11.2）
@@ -418,7 +425,7 @@ class StateStore:
         row = conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()
         version = int(row["value"]) if row else 0
-        if version >= 11:
+        if version >= 12:
             return
 
         # ---- v2 -> v3：submit_intent.token_id + recovery_task 查证计数 ----
@@ -636,6 +643,17 @@ class StateStore:
                     "ALTER TABLE qmx_robot_instance ADD COLUMN %s TEXT" % col)
         conn.execute(
             "UPDATE meta SET value=? WHERE key='schema_version'", ("11",))
+        conn.commit()
+
+        # ---- v11 -> v12：group_member_removed（⭐ D34-①B）----
+        # 「被管理员移除」要留痕：否则 D34 的自愈会把刚删掉的人立刻补回来，
+        # 移除形同虚设。旧库补表（新库已由 _SCHEMA 建好），无数据搬迁。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS group_member_removed ("
+            " group_id TEXT NOT NULL, user_id TEXT NOT NULL,"
+            " removed_at TEXT NOT NULL, PRIMARY KEY (group_id, user_id))")
+        conn.execute(
+            "UPDATE meta SET value=? WHERE key='schema_version'", ("12",))
         conn.commit()
 
     def _new_conn(self) -> sqlite3.Connection:
@@ -1214,6 +1232,33 @@ class StateStore:
         """移出应交名单：停止未来任务；⛔ 历史数据不可删除（本操作只删配置行）。"""
         self._conn.execute(
             "DELETE FROM group_member_task_config WHERE group_id=? AND user_id=?",
+            (group_id, user_id))
+        self._conn.commit()
+
+    # ---------- 「被移除」留痕（⭐ D34-①B，2026-10-22 用户指令） ----------
+    # 目的：管理员点「移出群」后，D34 的自动补录⛔ 不许再把人还魂回来。
+    # 管理员重新添加该成员时清掉留痕 = 解封。
+
+    def mark_member_removed(self, group_id: str, user_id: str) -> None:
+        """记一条「被管理员移出」痕迹（幂等）。"""
+        self._conn.execute(
+            "INSERT INTO group_member_removed(group_id, user_id, removed_at)"
+            " VALUES(?,?,?) ON CONFLICT(group_id, user_id) DO UPDATE SET"
+            " removed_at=excluded.removed_at",
+            (group_id, user_id, utcnow_iso()))
+        self._conn.commit()
+
+    def is_member_removed(self, group_id: str, user_id: str) -> bool:
+        """该用户是否被管理员移出过（未重新添加 = 仍在黑名单）。"""
+        row = self._conn.execute(
+            "SELECT 1 FROM group_member_removed WHERE group_id=? AND user_id=?",
+            (group_id, user_id)).fetchone()
+        return row is not None
+
+    def clear_member_removed(self, group_id: str, user_id: str) -> None:
+        """解除移除痕迹（管理员重新添加该成员时调用）。"""
+        self._conn.execute(
+            "DELETE FROM group_member_removed WHERE group_id=? AND user_id=?",
             (group_id, user_id))
         self._conn.commit()
 

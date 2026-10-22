@@ -43,6 +43,48 @@ def handle_upsert(writer, *, phone: str, name: Optional[str],
     return {"user_id": user_id, "created": created}
 
 
+def handle_update_phone(writer, *, old_phone: str, new_phone: str,
+                        group_id: Optional[str] = None) -> dict:
+    """⭐ D34-②B（2026-10-22 用户指令）：改手机号（同步全局档案，防身份分裂）。
+
+    ⛔ 不新建行：直接改 `sys_user.phone`，历史业务记录按 `user_id` 关联，
+    改号后仍然指向同一个人；否则用户拿新号打卡会 upsert 出第二条记录，
+    月底导出变成「一个人两张账单」。
+    """
+    import json
+    import uuid
+
+    request_id = "user-phone-%s" % uuid.uuid4().hex
+    with writer.pool.connection() as conn:
+        with conn.cursor() as cur:
+            writer.dao.insert_op_log(
+                cur, request_id, "user.update_phone", "user", group_id,
+                None, None,
+                json.dumps({"old_phone": old_phone, "new_phone": new_phone},
+                           ensure_ascii=False))
+            try:
+                user = writer.dao.update_user_phone(cur, old_phone, new_phone)
+            except ValueError as exc:
+                writer.dao.finish_op_log(cur, request_id, "failed",
+                                         json.dumps({"error": str(exc)},
+                                                    ensure_ascii=False),
+                                         None, None, None)
+                conn.commit()
+                raise
+            if user is None:
+                writer.dao.finish_op_log(cur, request_id, "failed",
+                                         '{"error": "old phone not found"}',
+                                         None, None, None)
+                conn.commit()
+                return {"updated": False, "user": None}
+            writer.dao.finish_op_log(cur, request_id, "success",
+                                     json.dumps({"user": user},
+                                                ensure_ascii=False),
+                                     user.get("id"), None, None)
+        conn.commit()
+    return {"updated": True, "user": user}
+
+
 def handle_get(writer, *, phone: str) -> dict:
     with writer.pool.connection() as conn:
         with conn.cursor() as cur:
@@ -92,6 +134,13 @@ def register(mcp, writer) -> None:
     def user_get(phone: str) -> dict:
         """按手机号查人员（只读）。"""
         return handle_get(writer, phone=phone)
+
+    @mcp.tool(name="user.update_phone")
+    def user_update_phone(old_phone: str, new_phone: str,
+                          group_id: str | None = None) -> dict:
+        """改手机号（后台改号同步全局档案；⛔ 不新建行，防身份分裂）。"""
+        return handle_update_phone(writer, old_phone=old_phone,
+                                   new_phone=new_phone, group_id=group_id)
 
     @mcp.tool(name="user.list")
     def user_list(phone_prefix: str | None = None, limit: int = 200) -> dict:

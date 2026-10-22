@@ -75,6 +75,25 @@ class Dao:
             ("id", "phone", "platform_user_id", "name", "department", "source",
              "status"), row))
 
+    def update_user_phone(self, cur, old_phone: str, new_phone: str) -> Optional[dict]:
+        """⭐ D34-②B（2026-10-22 用户指令）：把人员的手机号从旧号改成新号。
+
+        ⛔ 不新建行、⛔ 不动历史业务记录（都是按 user_id 关联的），只改这一列，
+        避免「后台改号 -> 新人用新号打卡 -> 凭空多一条 sys_user」的身份分裂。
+        返回改后的行；旧号不存在返回 None；新号已被占用抛 ValueError。
+        """
+        cur.execute("SELECT id FROM %s WHERE phone=%%s" % T_USER, (new_phone,))
+        if cur.fetchone():
+            raise ValueError("新手机号已存在")
+        cur.execute("SELECT id FROM %s WHERE phone=%%s" % T_USER, (old_phone,))
+        target = cur.fetchone()
+        if not target:
+            return None
+        cur.execute(
+            "UPDATE %s SET phone=%%s, updated_time=NOW(3) WHERE id=%%s" % T_USER,
+            (new_phone, target[0]))
+        return self.get_user(cur, new_phone)
+
     def list_users(self, cur, phone_prefix: Optional[str] = None,
                    limit: int = 200) -> list:
         if phone_prefix:

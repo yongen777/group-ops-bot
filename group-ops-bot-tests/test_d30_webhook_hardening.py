@@ -64,7 +64,7 @@ class TestMigrationV11:
         version = tmp_db._conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'"
         ).fetchone()["value"]
-        assert version == "11"
+        assert version == "12"
         cols = {r["name"] for r in tmp_db._conn.execute(
             "PRAGMA table_info(qmx_robot_instance)")}
         assert {"last_callback_url", "last_callback_at"} <= cols
@@ -95,7 +95,7 @@ class TestMigrationV11:
             assert {"last_callback_url", "last_callback_at"} <= cols
             assert store._conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
-            ).fetchone()["value"] == "11"
+            ).fetchone()["value"] == "12"
         finally:
             store.close()
 

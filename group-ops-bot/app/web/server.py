@@ -359,15 +359,14 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
                             summary_handler.BIZ)
                     reply = PAUSED_MEMBER_TEXT
                 elif parsed.result == commands.RESULT_DISPATCH:
-                    # ⭐ D33（2026-10-22 用户指令）：先验「后台是否已录入该用户」。
-                    # 未录入 = 没实名 -> 提示去实名，⛔ 不执行业务（也不落任何业务记录）。
-                    # ⚠️ 只在群开关 require_realname 打开时生效；后端不可用
-                    # （registered_state 返回 None）一律放行，⛔ 不因后端抖动挡住业务。
-                    if (realname_handler.blocks_business(ctx, parsed)
-                            and realname_handler.registered_state(ctx) is False):
-                        reply = realname_handler.REQUIRE_REALNAME_TEXT
-                    else:
-                        reply = router.dispatch(parsed, ctx)
+                    # ⭐ D33/D34（2026-10-22 用户指令）：先验「是否在本群名单」；
+                    # 不在则尝试用全局档案自愈入册（无感放行）；被管理员移出过
+                    # 的⛔ 不自愈，回「已被移出，请联系管理员」。
+                    # ⚠️ 后端不可用一律放行，⛔ 不因抖动挡住业务。
+                    denied = (realname_handler.deny_text(ctx)
+                              if realname_handler.blocks_business(ctx, parsed)
+                              else None)
+                    reply = denied if denied else router.dispatch(parsed, ctx)
                 elif parsed.result == commands.RESULT_UNKNOWN:
                     # 两轮总结优先于未知命令话术（§2.2）
                     reply = summary_handler.handle_pending_text(ctx)

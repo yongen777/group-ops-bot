@@ -77,6 +77,11 @@ REQUIRE_REALNAME_TEXT = (
 GATED_COMMANDS = (commands.CMD_CHECKIN, commands.CMD_SUMMARY,
                   commands.CMD_REPORT)
 
+# ⭐ D34-①B（2026-10-22 用户指令）：被管理员「移出群」的人⛔ 不许被自愈还魂。
+REMOVED_FROM_ROSTER_TEXT = (
+    "⚠️ 您已被管理员移出本群名单，暂无权限使用该功能。\n"
+    "如需恢复请联系管理员在后台重新添加。")
+
 
 def _auto_heal_into_roster(ctx: HandlerContext) -> Optional[bool]:
     """⭐ D34（2026-10-22 用户指令）：**全局档案静默自愈入册**。
@@ -89,6 +94,12 @@ def _auto_heal_into_roster(ctx: HandlerContext) -> Optional[bool]:
     动机：管理员误删名单、或跨群已实名的人，此前会被「打卡要实名 / 实名说已完成」
     互锁死。自愈后一条命令就把他补回册，后台「群成员」里立刻可见。
     """
+    # ⭐ D34-①B：被管理员移出过的人⛔ 不自愈还魂（管理员重新添加会清掉痕迹）
+    try:
+        if ctx.state.is_member_removed(ctx.group_id, ctx.phone):
+            return False
+    except Exception:
+        pass
     try:
         user = (ctx.backend.user_get(phone=ctx.phone) or {}).get("user")
     except Exception:
@@ -135,6 +146,22 @@ def registered_state(ctx: HandlerContext) -> Optional[bool]:
 def blocks_business(ctx: HandlerContext, parsed) -> bool:
     """该命令是否要先过实名校验（常开，⛔ 无开关可关）。"""
     return getattr(parsed, "command", None) in GATED_COMMANDS
+
+
+def deny_text(ctx: HandlerContext) -> Optional[str]:
+    """准入失败时的回话；None = 放行。
+
+    「被管理员移出」优先于「未实名」：前者是管理员的明确决定，
+    回实名话术会误导他去做无用功。
+    """
+    if registered_state(ctx) is not False:
+        return None
+    try:
+        if ctx.state.is_member_removed(ctx.group_id, ctx.phone):
+            return REMOVED_FROM_ROSTER_TEXT
+    except Exception:
+        pass
+    return REQUIRE_REALNAME_TEXT
 
 _PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 # 姓名：2~20 位汉字（允许少数民族姓名的间隔号）或纯英文字母

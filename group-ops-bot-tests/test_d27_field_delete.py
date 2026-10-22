@@ -129,7 +129,7 @@ class TestFieldIdNotReused:
             version = store._conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
             ).fetchone()["value"]
-            assert version == "11"
+            assert version == "12"
             row = store._conn.execute(
                 "SELECT last_id FROM report_field_seq WHERE group_id=?",
                 (GROUP,)).fetchone()

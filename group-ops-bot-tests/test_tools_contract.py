@@ -24,7 +24,7 @@ EXPECTED_TOOLS = {
     "summary.admin_update",
     "report.submit", "report.query_status", "report.query_records",
     "report.admin_update",
-    "user.upsert", "user.get", "user.list",
+    "user.upsert", "user.get", "user.list", "user.update_phone",
     "op.query_by_request", "op.query_log",
 }
 

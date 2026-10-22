@@ -41,6 +41,14 @@ class Backend(ABC):
     def user_get(self, *, phone: str) -> dict:
         """按手机号查人员（只读）。返回 {"user": dict|None}。"""
 
+    @abstractmethod
+    def user_update_phone(self, *, old_phone: str, new_phone: str,
+                          group_id: Optional[str] = None) -> dict:
+        """⭐ D34-②B：把人员手机号改成新号（⛔ 不新建行）。
+
+        返回 {"updated": bool, "user": dict|None}；新号已占用时抛 BackendError。
+        """
+
     # ---------- 打卡 ----------
 
     @abstractmethod

@@ -305,6 +305,11 @@ class McpSseAdapter(Backend):
     def user_get(self, *, phone) -> dict:
         return self._call_tool("user.get", {"phone": phone})
 
+    def user_update_phone(self, *, old_phone, new_phone, group_id=None) -> dict:
+        return self._call_tool("user.update_phone", {
+            "old_phone": old_phone, "new_phone": new_phone,
+            "group_id": group_id})
+
     def checkin_submit(self, *, user_id, group_id, period_key, session,
                        image_ref, image_meta=None, request_id,
                        status="NORMAL", entry_source="user",

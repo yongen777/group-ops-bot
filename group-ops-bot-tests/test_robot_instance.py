@@ -136,7 +136,7 @@ class TestMigrationV5ToV6:
         # + v9 reminder_plan.source（2026-10-20）
         # + v10 report_field_seq（2026-10-20 字段可真删 -> id 不复用）
         # + v11 实例表 last_callback_url/last_callback_at（2026-10-20 D30）
-        assert version == "11"
+        assert version == "12"
         cols = {r["name"] for r in conn.execute(
             "PRAGMA table_info(qmx_robot_instance)")}
         assert cols == {"group_id", "display_name", "webhook_base_url",
@@ -164,7 +164,7 @@ class TestMigrationV5ToV6:
             conn = store._conn
             assert conn.execute(
                 "SELECT value FROM meta WHERE key='schema_version'"
-            ).fetchone()["value"] == "11"
+            ).fetchone()["value"] == "12"
             tables = {r["name"] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             assert "qmx_robot_instance" in tables

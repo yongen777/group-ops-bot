@@ -157,6 +157,16 @@ class FakeBackend:
             return self.results["user_get"]
         return {"user": {"id": 7, "phone": phone, "name": "测试用户"}}
 
+    def user_update_phone(self, *, old_phone, new_phone, group_id=None):
+        """⭐ D34-②B：改号（测试双）。可脚本化冲突/缺失。"""
+        self._record("user_update_phone",
+                     {"old_phone": old_phone, "new_phone": new_phone,
+                      "group_id": group_id})
+        self._maybe_raise("user_update_phone")
+        return self.results.get("user_update_phone", {
+            "updated": True,
+            "user": {"id": 7, "phone": new_phone, "name": "测试用户"}})
+
     def checkin_submit(self, *, user_id, group_id, period_key, session,
                        image_ref, image_meta=None, request_id,
                        status="NORMAL", entry_source="user"):

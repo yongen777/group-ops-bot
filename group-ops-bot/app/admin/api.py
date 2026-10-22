@@ -724,6 +724,8 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         enabled = body.get("enabled", True)
         state.upsert_member_task(group_id, user_id, nickname=nickname,
                                  role=role, enabled=bool(enabled))
+        # ⭐ D34-①B：管理员重新添加 = 解封，清掉「被移出」留痕
+        state.clear_member_removed(group_id, user_id)
         _audit(state, request, identity, "member.add", "member",
                "%s/%s" % (group_id, user_id),
                {"nickname": nickname, "role": role, "enabled": bool(enabled)})
@@ -765,6 +767,20 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                     raise HTTPException(
                         status_code=409,
                         detail="该手机号码已在群成员名单中")
+                # ⭐ D34-②B（2026-10-22 用户指令）：改号必须**先**同步全局档案，
+                # 否则用户拿新号打卡会 upsert 出第二条 sys_user（一人两身份、
+                # 月底导出变两张账单）。失败就整笔不动，⛔ 不留半改状态。
+                try:
+                    backend.user_update_phone(old_phone=user_id,
+                                              new_phone=new_user_id,
+                                              group_id=group_id)
+                except Exception:
+                    state.record_security_event(
+                        "member_rename_backend_failed", group_id, user_id,
+                        "user.update_phone failed")
+                    raise HTTPException(
+                        status_code=502,
+                        detail="改号未同步到人员目录，操作已取消；请稍后重试")
                 state.rename_member_task(group_id, user_id, new_user_id)
                 user_id = new_user_id
         state.upsert_member_task(group_id, user_id, nickname=nickname,
@@ -786,9 +802,13 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         # 删除其导出授权，⛔ 不留孤儿授权（remove_whitelist 幂等，无授权
         # 时静默）。
         state.remove_whitelist(group_id, user_id)
+        # ⭐ D34-①B（2026-10-22 用户指令）：留痕「被管理员移出」——
+        # 否则 D34 的自动补录会把人立刻加回来，移除形同虚设。
+        state.mark_member_removed(group_id, user_id)
         _audit(state, request, identity, "member.remove", "member",
                "%s/%s" % (group_id, user_id),
-               {"note": "停止未来任务；历史业务记录保留；导出授权级联失效"})
+               {"note": "停止未来任务；历史业务记录保留；导出授权级联失效；"
+                        "标记移除痕迹（自愈不再复活）"})
         return {"ok": True}
 
     # ---------- 导出白名单（2026-10-19 用户指令：单权化）----------
