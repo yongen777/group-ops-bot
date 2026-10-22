@@ -754,6 +754,7 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         # ⛔ 只改名单配置行（+ 跟着人走的导出授权），历史业务记录仍按旧手机号
         # 留在 MySQL，不会跟着改 —— 这一点必须让管理员知道。
         old_user_id = user_id
+        rename_result = {"renamed": [], "conflicts": []}
         if "new_user_id" in body:
             new_user_id = _clean_str(body.get("new_user_id"), "手机号码", 32)
             if new_user_id != user_id:
@@ -781,15 +782,22 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                     raise HTTPException(
                         status_code=502,
                         detail="改号未同步到人员目录，操作已取消；请稍后重试")
-                state.rename_member_task(group_id, user_id, new_user_id)
+                # ⭐ D34-②B：改号**跨群联动**（手机号是同一个人的标识，
+                # 只改当前群会让他在别的群变成另一个人）
+                rename_result = state.rename_member_all_groups(user_id,
+                                                               new_user_id)
                 user_id = new_user_id
         state.upsert_member_task(group_id, user_id, nickname=nickname,
                                  role=role, enabled=enabled)
         _audit(state, request, identity, "member.update", "member",
                "%s/%s" % (group_id, user_id),
                {"nickname": nickname, "role": role, "enabled": enabled,
-                "old_user_id": old_user_id, "new_user_id": user_id})
-        return {"ok": True, "user_id": user_id}
+                "old_user_id": old_user_id, "new_user_id": user_id,
+                "renamed_groups": rename_result["renamed"],
+                "conflict_groups": rename_result["conflicts"]})
+        return {"ok": True, "user_id": user_id,
+                "renamed_groups": rename_result["renamed"],
+                "conflict_groups": rename_result["conflicts"]}
 
     @router.delete("/groups/{group_id}/members/{user_id}")
     def remove_member(group_id: str, user_id: str, request: Request):

@@ -1353,6 +1353,52 @@ class StateStore:
                 "DELETE FROM pending_session WHERE group_id=? AND phone=?",
                 (group_id, old_user_id))
 
+    def rename_member_all_groups(self, old_user_id: str,
+                                 new_user_id: str) -> dict:
+        """⭐ D34-②B（2026-10-22 用户指令）：改号**跨群联动**。
+
+        手机号是「同一个人的标识」，只改当前群会让这个人在别的群变成另一个人
+        （导出/提醒对不上）。这里一次改完：
+        1. 所有群名单行：逐群改号；**某群已有该新号**（同号两人）则跳过该群，
+           记入 conflicts 让后台提示管理员人工处理，⛔ 不静默合并两个人；
+        2. 所有群导出授权：跟着人走（`UPDATE OR IGNORE` 防主键冲突，再清旧号残留）；
+        3. 所有群该旧号的两轮会话：清掉（否则旧号下条文本被当成"上一轮的答案"）。
+
+        整体一个事务：异常全部回滚，⛔ 不留半截。返回
+        `{"renamed": [群], "conflicts": [群]}`。
+        """
+        if old_user_id == new_user_id:
+            return {"renamed": [], "conflicts": []}
+        now_iso = utcnow_iso()
+        groups = [r["group_id"] for r in self._conn.execute(
+            "SELECT DISTINCT group_id FROM group_member_task_config"
+            " WHERE user_id=?", (old_user_id,))]
+        renamed, conflicts = [], []
+        with self._conn:
+            for gid in groups:
+                taken = self._conn.execute(
+                    "SELECT 1 FROM group_member_task_config"
+                    " WHERE group_id=? AND user_id=?",
+                    (gid, new_user_id)).fetchone()
+                if taken:
+                    conflicts.append(gid)
+                    continue
+                self._conn.execute(
+                    "UPDATE group_member_task_config SET user_id=?, updated_at=?"
+                    " WHERE group_id=? AND user_id=?",
+                    (new_user_id, now_iso, gid, old_user_id))
+                renamed.append(gid)
+            # 授权跨群跟随（冲突行先 IGNORE，再统一清旧号残留）
+            self._conn.execute(
+                "UPDATE OR IGNORE export_whitelist SET user_id=?, updated_at=?"
+                " WHERE user_id=?", (new_user_id, now_iso, old_user_id))
+            self._conn.execute(
+                "DELETE FROM export_whitelist WHERE user_id=?", (old_user_id,))
+            # 会话无群维度限制：旧号在任何群留下的两轮状态都要清
+            self._conn.execute(
+                "DELETE FROM pending_session WHERE phone=?", (old_user_id,))
+        return {"renamed": renamed, "conflicts": conflicts}
+
     def upsert_field(self, group_id: str, field_id: int, field_name: str,
                      unit: Optional[str], roles: list, enabled: bool,
                      sort_order: int) -> None:

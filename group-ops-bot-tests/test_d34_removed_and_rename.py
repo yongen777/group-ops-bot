@@ -149,3 +149,66 @@ class TestAdminRemoveWritesMark:
                       "/api/admin/groups/%s/members" % GROUP,
                       {"user_id": PHONE, "nickname": "郑佳"}).status_code == 200
         assert tmp_db.is_member_removed(GROUP, PHONE) is False
+
+
+# ---------- ②B 跨群联动（2026-10-22 用户指令：提示"全群联动"必须是真的） ----------
+
+GROUP2 = "G200"
+
+
+class TestRenameAcrossGroups:
+    def test_renames_in_all_groups(self, tmp_db):
+        tmp_db.create_group(GROUP2, "第二群")
+        tmp_db.upsert_member_task(GROUP, PHONE, nickname="郑佳")
+        tmp_db.upsert_member_task(GROUP2, PHONE, nickname="郑佳")
+        tmp_db.upsert_whitelist(GROUP2, PHONE, "ADMIN_ALL")
+
+        result = tmp_db.rename_member_all_groups(PHONE, "13800138099")
+        assert sorted(result["renamed"]) == sorted([GROUP, GROUP2])
+        assert result["conflicts"] == []
+        assert tmp_db.get_member_task(GROUP, "13800138099") is not None
+        assert tmp_db.get_member_task(GROUP2, "13800138099") is not None
+        assert tmp_db.get_member_task(GROUP, PHONE) is None
+        assert tmp_db.get_member_task(GROUP2, PHONE) is None
+        # 授权跟着人跨群走
+        assert [r["user_id"] for r in tmp_db.list_whitelist(GROUP2)] == \
+            ["13800138099"]
+
+    def test_conflict_group_skipped_not_merged(self, tmp_db):
+        """某群已存在新号（同号两人）-> 跳过该群并报告，⛔ 不静默合并。"""
+        tmp_db.create_group(GROUP2, "第二群")
+        tmp_db.upsert_member_task(GROUP, PHONE, nickname="郑佳")
+        tmp_db.upsert_member_task(GROUP2, PHONE, nickname="郑佳")
+        tmp_db.upsert_member_task(GROUP2, "13800138099", nickname="另一个人")
+
+        result = tmp_db.rename_member_all_groups(PHONE, "13800138099")
+        assert result["renamed"] == [GROUP]
+        assert result["conflicts"] == [GROUP2]
+        # 冲突群保持原样：两个人都在，谁也没被覆盖
+        assert tmp_db.get_member_task(GROUP2, PHONE)["nickname"] == "郑佳"
+        assert tmp_db.get_member_task(GROUP2, "13800138099")["nickname"] == "另一个人"
+
+    def test_api_returns_group_counts(self, tmp_db):
+        from test_admin import mutate
+        admin = _admin(tmp_db)
+        tmp_db.create_group(GROUP2, "第二群")
+        tmp_db.upsert_member_task(GROUP, PHONE, nickname="郑佳")
+        tmp_db.upsert_member_task(GROUP2, PHONE, nickname="郑佳")
+        resp = mutate(admin, "PUT",
+                      "/api/admin/groups/%s/members/%s" % (GROUP, PHONE),
+                      {"new_user_id": "13800138099"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert sorted(body["renamed_groups"]) == sorted([GROUP, GROUP2])
+        assert body["conflict_groups"] == []
+
+    def test_clears_pending_sessions_everywhere(self, tmp_db):
+        from helpers import TZ
+        from datetime import datetime
+        tmp_db.create_group(GROUP2, "第二群")
+        tmp_db.upsert_member_task(GROUP, PHONE, nickname="郑佳")
+        tmp_db.upsert_member_task(GROUP2, PHONE, nickname="郑佳")
+        now = datetime(2026, 10, 22, 10, 0, tzinfo=TZ)
+        tmp_db.put_pending_session(GROUP2, PHONE, "summary", "日报", now)
+        tmp_db.rename_member_all_groups(PHONE, "13800138099")
+        assert tmp_db.get_pending_session(GROUP2, PHONE, "summary", now) is None

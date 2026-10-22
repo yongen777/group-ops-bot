@@ -356,7 +356,10 @@ export const GroupManagement: React.FC = () => {
     try {
       // ⚠️ 改手机号只改名单配置（+跟着人走的导出授权），
       //    历史业务记录仍挂在旧号码上，不会跟着改
-      const result = await api.put<{ ok: boolean; user_id: string }>(
+      const result = await api.put<{
+        ok: boolean; user_id: string;
+        renamed_groups?: string[]; conflict_groups?: string[];
+      }>(
         `/api/admin/groups/${gid(selectedGroupId)}/members/${gid(editingMember.user_id)}`,
         {
           nickname: editingMember.nickname.trim(),
@@ -368,9 +371,18 @@ export const GroupManagement: React.FC = () => {
       await loadMembers();
       await loadGrants();
       const renamed = result.user_id !== editingMember.user_id;
-      showToast(renamed
-        ? `成员信息已更新（手机号改为 ${result.user_id}）；历史业务记录仍按旧号码留存`
-        : '成员信息已成功更新');
+      const conflictCount = result.conflict_groups?.length || 0;
+      if (renamed && conflictCount > 0) {
+        // 某些群已存在同一新号（同号两人）-> 那些群⛔ 不合并，交人工处理
+        showToast(
+          `手机号已改为 ${result.user_id}，但 ${conflictCount} 个群已存在该号码，未自动合并，请人工核对`,
+          'error',
+        );
+      } else {
+        showToast(renamed
+          ? `成员信息已更新（手机号改为 ${result.user_id}，已同步 ${result.renamed_groups?.length || 0} 个群）；历史业务记录仍按旧号码留存`
+          : '成员信息已成功更新');
+      }
     } catch (err: any) {
       showToast(err?.message || '保存未成功', 'error');
     }
@@ -1715,8 +1727,10 @@ export const GroupManagement: React.FC = () => {
                   placeholder="4~32 位数字/字母"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono text-slate-800 outline-none focus:bg-white focus:border-blue-500"
                 />
-                <p className="text-[10px] text-amber-700 mt-1">
-                  改号只影响名单与授权；历史业务记录仍挂在旧号码下，不会迁移。
+                <p className="text-[10px] text-amber-700 mt-1 leading-relaxed">
+                  ⚠️ 改号将同步更新该成员在
+                  <span className="font-semibold">所有群</span>
+                  的名单与权限；历史业务记录仍挂在旧号码下，不会迁移。
                 </p>
               </div>
 
