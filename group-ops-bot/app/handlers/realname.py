@@ -88,6 +88,14 @@ REMOVED_FROM_ROSTER_TEXT = (
     "如需恢复请联系管理员在后台重新添加。")
 
 
+def _is_removed(ctx: HandlerContext) -> bool:
+    """在本群有「被管理员移出」留痕？查询异常按未移出处理（⛔ 不误拦）。"""
+    try:
+        return bool(ctx.state.is_member_removed(ctx.group_id, ctx.phone))
+    except Exception:
+        return False
+
+
 def _auto_heal_into_roster(ctx: HandlerContext) -> Optional[bool]:
     """⭐ D34（2026-10-22 用户指令）：**全局档案静默自愈入册**。
 
@@ -283,6 +291,12 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
     ⭐ 2026-10-20 用户指令：已实名过的人再发「实名」-> 直接拦住并回显脱敏
     信息（⛔ 不重复登记、⛔ 不重复写 upsert / 审计）。
     """
+    # ⭐ 2026-10-23 用户指令：被管理员移出的人⛔ 不许自助实名回册 ——
+    # 否则「移出」形同虚设（他自己发一次实名就回来了）。只能由管理员在
+    # 后台「群成员」重新添加（添加会清掉留痕）。此处优先于「已完成登记」。
+    if _is_removed(ctx):
+        return REMOVED_FROM_ROSTER_TEXT
+
     existing = _registered_user(ctx)
     if existing is not None:
         return ALREADY_REGISTERED_TEXT.format(
@@ -305,6 +319,11 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
             ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)
             return EXPIRED_TEXT
         return None
+
+    # 兜底：会话挂起期间被管理员移出 -> 终止登记并清会话（⛔ 不让他提交成功）
+    if _is_removed(ctx):
+        ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)
+        return REMOVED_FROM_ROSTER_TEXT
 
     text = (ctx.text or "").strip()
     if text == CANCEL_TEXT:
