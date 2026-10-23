@@ -67,6 +67,7 @@ from ..handlers.base import (KIND_A, PAUSED_MEMBER_TEXT, HandlerContext,
                              token_record_from_row)
 from ..router import Router
 from ..state import StateStore
+from ..web import app_crypto as app_crypto_mod
 from ..web import uploads as uploads_mod
 from ..web.payload_probe import shape_line
 from ..web.platform_adapter import adapt as adapt_platform_payload
@@ -256,9 +257,40 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
 
     @app.post("/api/app-events")
     async def app_events_receive(request: Request):
-        """接收事件（暂只记录，验签/解密待观测确认后实现）。"""
+        """接收自建应用事件：验签 → 解密 → 落盘（D41，2026-10-23）。
+
+        ⚠️ 未配置 `GOPS_APP_ENCRYPT_KEY` / `GOPS_APP_VERIFY_TOKEN` 时退回**只观测**
+        形态（仍旧 200），便于先摸清报文；配置后一律严格验签，失败返回 401。
+        """
         raw = await request.body()
-        _app_event_probe(request, {"body": raw.decode("utf-8", "replace")[:4000]})
+        text = raw.decode("utf-8", "replace").strip()
+        h = request.headers
+        ts = h.get("x-ctq-timestamp", "")
+        nonce = h.get("x-ctq-nonce", "")
+        sig = h.get("x-ctq-signature", "")
+
+        key = (os.environ.get("GOPS_APP_ENCRYPT_KEY") or "").strip()
+        token = (os.environ.get("GOPS_APP_VERIFY_TOKEN") or "").strip()
+
+        if not (key and token):
+            _app_event_probe(request, {"body": text[:4000], "status": "probing"})
+            return {"success": True, "code": 200, "message": "OK"}
+
+        payload = app_crypto_mod.open_payload(key, token, ts, nonce, sig, text)
+        if payload is None:
+            _app_event_probe(request, {"body": text[:2000], "status": "rejected"})
+            return JSONResponse({"success": False, "code": 401,
+                                 "message": "invalid signature"},
+                                status_code=401)
+
+        _app_event_probe(request, {
+            "body": text[:2000], "status": "ok",
+            "event_type": payload.get("eventType", ""),
+            "user_id": payload.get("userId", ""),
+            "group_id": payload.get("groupId", ""),
+            "msg_uid": payload.get("msgUid", ""),
+            "content": json.dumps(payload.get("content", ""), ensure_ascii=False)[:1000],
+        })
         return {"success": True, "code": 200, "message": "OK"}
 
     @app.get("/healthz")
