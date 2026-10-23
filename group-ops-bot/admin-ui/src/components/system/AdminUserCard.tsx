@@ -15,6 +15,11 @@ import {
 } from 'lucide-react';
 import { api, plainError, setCsrfToken } from '../../lib/api';
 
+/** 密码校验框统一属性：⛔ 不用 type="password" —— Edge 会把它当登录表单，
+ *  点「验证」时弹「Microsoft 登录（无网络连接 2603）」。改成 text + CSS 掩码，
+ *  浏览器不再识别为密码字段，也就不会触发密码管理器/账户登录。 */
+const MASKED_INPUT_STYLE = { WebkitTextSecurity: 'disc' } as unknown as React.CSSProperties;
+
 export interface AdminMe {
   username: string;
   must_change_password: boolean;
@@ -130,7 +135,10 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
           <div>
             <label className="font-semibold text-slate-700 block mb-1">当前原密码</label>
             <input
-              type="password"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              style={MASKED_INPUT_STYLE}
               placeholder="请输入当前登录密码"
               value={oldPassword}
               onChange={(e) => setOldPassword(e.target.value)}
@@ -141,7 +149,10 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
           <div>
             <label className="font-semibold text-slate-700 block mb-1">新密码 (至少 8 位)</label>
             <input
-              type="password"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              style={MASKED_INPUT_STYLE}
               placeholder="至少8位字符，建议包含字母与数字"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
@@ -152,7 +163,10 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
           <div>
             <label className="font-semibold text-slate-700 block mb-1">确认新密码</label>
             <input
-              type="password"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              style={MASKED_INPUT_STYLE}
               placeholder="请再次输入新密码"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
@@ -290,7 +304,10 @@ export const CallbackUrlModal: React.FC<CallbackUrlModalProps> = ({ isOpen, onCl
             <div>
               <label className="font-semibold text-slate-700 block mb-1">登录密码</label>
               <input
-                type="password"
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                style={MASKED_INPUT_STYLE}
                 placeholder="请输入当前登录密码"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -464,7 +481,10 @@ export const ChangeUsernameModal: React.FC<ChangeUsernameModalProps> = ({
           <div>
             <label className="font-semibold text-slate-700 block mb-1">登录密码（用于验证身份）</label>
             <input
-              type="password"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              style={MASKED_INPUT_STYLE}
               placeholder="请输入当前登录密码"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
