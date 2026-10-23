@@ -1889,7 +1889,6 @@ export const GroupManagement: React.FC = () => {
                 其管理员授权同时失效；历史业务记录保留。
               </p>
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
-                移出后该成员将无法在本群打卡，系统也不会自动把他加回来；
                 <span className="font-semibold">后续如需恢复必须由管理员在此处手动添加，不再支持群成员 @机器人 实名录入。</span>
               </p>
             </div>
