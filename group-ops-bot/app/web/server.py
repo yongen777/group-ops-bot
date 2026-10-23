@@ -42,13 +42,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .. import commands
 from .. import normalize as normalize_mod
@@ -219,6 +221,45 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
     # 注：令牌拒绝的安全留痕在处理器内统一落（覆盖 info + submit 两条路径），
     #     ⛔ 这里不再记一份，否则同一拒绝会重复两条 security_event。
     # ---------- 探针 ----------
+
+    # ⭐ D40（2026-10-23）量子密信自建应用「事件订阅 HTTP 模式」回调入口。
+    # 文档只写了「按配置校验签名」，**未给算法** → 先做**只观测**形态：
+    # 原样把 header/query/body 落到 JSONL，返回 200，用真实请求确定格式后再实现
+    # 验签与解密（⛔ 不猜算法）。端点独立于群机器人回调，互不影响。
+    def _app_event_probe(request: Request, extra: dict) -> None:
+        try:
+            rec = {
+                "at": _now_dt().strftime("%Y-%m-%d %H:%M:%S"),
+                "method": request.method,
+                "path": request.url.path,
+                "query": dict(request.query_params),
+                "headers": {k: v for k, v in request.headers.items()
+                            if k.lower().startswith("x-ctq-")
+                            or k.lower() in ("content-type", "user-agent")},
+            }
+            rec.update(extra)
+            base = os.path.dirname(getattr(state, "db_path", "") or ".")
+            with open(os.path.join(base, "app_events_probe.jsonl"),
+                      "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception:
+            LOG.exception("app event probe dump failed")
+
+    @app.get("/api/app-events")
+    def app_events_verify(request: Request):
+        """平台「点击测试」URL 校验（常见形态：?echostr=... 需原样返回）。"""
+        _app_event_probe(request, {})
+        echo = request.query_params.get("echostr")
+        if echo:
+            return PlainTextResponse(echo)
+        return {"success": True, "code": 200, "message": "OK"}
+
+    @app.post("/api/app-events")
+    async def app_events_receive(request: Request):
+        """接收事件（暂只记录，验签/解密待观测确认后实现）。"""
+        raw = await request.body()
+        _app_event_probe(request, {"body": raw.decode("utf-8", "replace")[:4000]})
+        return {"success": True, "code": 200, "message": "OK"}
 
     @app.get("/healthz")
     def healthz():
