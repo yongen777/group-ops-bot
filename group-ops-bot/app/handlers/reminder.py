@@ -88,6 +88,27 @@ class ReminderTarget:
     session: Optional[str] = None
 
 
+def _unique(items) -> list:
+    """去重且保序（时段列表可能被配置成重复 id，重复即在同一键上自撞）。"""
+    seen = set()
+    result = []
+    for item in items:
+        key = "" if item is None else str(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _mask_phone(phone: str) -> str:
+    """日志里的手机号脱敏（⛔ 不把完整号码写进日志）。"""
+    value = str(phone or "")
+    if len(value) < 7:
+        return "***"
+    return "%s****%s" % (value[:3], value[-4:])
+
+
 def _passed(now: datetime, hhmm: str) -> bool:
     """now 是否已过今日 hhmm 时刻（服务端时区，§2.3）。"""
     try:
@@ -249,12 +270,24 @@ def compute_incomplete(ctx, group_id: str, biz: str, period_key: str,
         user_row = ctx.backend.user_get(phone=phone).get("user")
         if user_row is None:
             # 从未提交过任何内容的人员目录里不存在 -> 未完成
-            targets.append(ReminderTarget(group_id, biz, period_key, phone,
-                                          person["nickname"]))
+            # ⚠️ D42（2026-10-26）线上事故：这里**必须**按本轮时段逐个产出目标。
+            # 旧实现不带 session（session=None），而 reminder_plan 的唯一键含
+            # IFNULL(session,'')，于是：上午那轮把 (…,phone,'') 写成 sent，
+            # 下午那轮同一键被唯一索引挡住 -> 门控读回上午那条 sent 行 ->
+            # 判为「本期已提醒过」-> 该成员在下午这条提醒里被**静默丢弃**
+            # （2026-10-25 14:20 高翔漏 @：tick 日志 targets 6 / new 5）。
+            if biz == "checkin":
+                for session in _unique((sessions or list(CHECKIN_DEADLINES))):
+                    targets.append(ReminderTarget(
+                        group_id, biz, period_key, phone,
+                        person["nickname"], session))
+            else:
+                targets.append(ReminderTarget(group_id, biz, period_key, phone,
+                                              person["nickname"]))
             continue
         user_id = int(user_row["id"])
         if biz == "checkin":
-            for session in (sessions or list(CHECKIN_DEADLINES)):
+            for session in _unique(sessions or list(CHECKIN_DEADLINES)):
                 status = ctx.backend.checkin_query_status(
                     user_id=user_id, group_id=group_id, period_key=period_key,
                     session=session)
@@ -389,7 +422,9 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
 
     summary = {"targets": 0, "new": 0, "sent": 0, "unsent": 0,
                "errors": [], "skipped": None, "biz": biz,
-               "manual": manual, "skipped_cooled": 0}
+               "manual": manual, "skipped_cooled": 0,
+               # ⭐ D42：被门控拦下的目标（脱敏手机号），用于排查「判定了却没发」
+               "dropped": []}
     group_id = group_row["group_id"]
     if not state.group_active(group_id):
         summary["skipped"] = "group_disabled"
@@ -460,6 +495,7 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
         #     unsent / pending 按 5 分钟冷却重试（推送失败容错，⛔ 不是重复打扰）
         #   - 手动提醒（manual=True）：5 分钟冷却已过可重发（连点不轰炸）
         fresh = []
+        dropped = []
         for target in targets:
             allowed = state.record_reminder_plan(
                 group_id=target.group_id, biz=target.biz,
@@ -472,8 +508,24 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
             if allowed:
                 fresh.append(target)
             else:
+                dropped.append(target)
                 # 冷却中 / 本期已提醒过：⛔ 不重复打扰（消息也不会发）
                 summary["skipped_cooled"] = summary.get("skipped_cooled", 0) + 1
+        if dropped:
+            summary["dropped"].extend(_mask_phone(t.phone) for t in dropped)
+            if fresh:
+                # ⭐ D42（2026-10-26）：「同一轮里有人放行、有人被拦」是最可疑的
+                # 形状 —— 2026-10-25 下午高翔漏 @ 就是 targets 6 / fresh 5。
+                # 只打这一种 WARNING；全员被拦（重复 tick 的正常情形）走 debug。
+                LOG.warning(
+                    "reminder partially gated: group=%s biz=%s period=%s "
+                    "session=%s fresh=%d dropped=%s",
+                    group_id, one, period_keys[one], sessions, len(fresh),
+                    [(t.phone and _mask_phone(t.phone), t.session) for t in dropped])
+            else:
+                LOG.debug("reminder all gated: group=%s biz=%s period=%s "
+                          "session=%s dropped=%d", group_id, one,
+                          period_keys[one], sessions, len(dropped))
         if not fresh:
             continue   # ⛔ 全员门控未过 -> 一条都不发
         # ⭐ 只发**一条**合并消息（2026-10-16 用户指令五）：@ 未完成的全体，

@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -37,6 +38,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import urlparse
+
+LOG = logging.getLogger("group-ops.state")
 
 SCHEMA_VERSION = 7  # v7：h5_upload（H5 图片上传凭证：ref -> 落盘文件绑定令牌，
 # 2026-10-16 用户指令一 / §4.11.4 D4 定夺：方案 A 机器人中转 + 服务器磁盘；
@@ -1717,7 +1720,19 @@ class StateStore:
             " AND period_key=? AND phone=? AND IFNULL(session,'')=IFNULL(?,'')",
             (group_id, biz, period_key, phone, session)).fetchone()
         if row is None:  # pragma: no cover - 并发删除的极端窗口
-            return False
+            # ⚠️ D42（2026-10-26）：这里 ⛔ 不能静默 return False。
+            # 返回 False = 「本期已提醒过」→ 调用方把该目标从 fresh 里剔除，
+            # 消息里这个人就**凭空消失**（2026-10-25 下午高翔漏 @ 的最终落点）。
+            # 插入被唯一键挡下、却按同一键查不到行，说明状态不一致（并发删除 /
+            # 键拼装含空值差异），此时按「没发过」放行并留痕，宁可多发一次
+            # 也不静默漏掉一个人。
+            LOG.warning(
+                "reminder_plan insert ignored but row missing: group=%s biz=%s "
+                "period=%s phone=%s session=%s -> allow (fail-open)",
+                group_id, biz, period_key,
+                ("%s****%s" % (phone[:3], phone[-4:])
+                 if len(phone) >= 7 else "***"), session)
+            return True
         row_source = (row["source"] if "source" in row.keys() else "auto") or "auto"
         takeover = (source == "auto" and row["status"] == "sent"
                     and row_source == "manual" and not resend_sent)
