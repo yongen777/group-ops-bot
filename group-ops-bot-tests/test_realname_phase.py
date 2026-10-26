@@ -222,8 +222,15 @@ class TestPausedMember:
         assert "请发送您的「姓名 手机号」" in sender.sent[-1]["text"]
 
     def test_already_registered_gets_blocked(self, tmp_db):
-        """⭐ 2026-10-20 用户指令：已实名过再发「实名」-> 拦住，⛔ 不重复登记。"""
+        """⭐ 2026-10-20 用户指令：已实名过再发「实名」-> 拦住，⛔ 不重复登记。
+
+        ⚠️ D43（2026-10-26）：本用例原来用的是**空名单**（enable_all 不建成员），
+        那其实是「跨群实名过、但本群还没这个人」的场景 —— 旧实现在这种群回
+        「已完成登记」，导致他永远进不了本群名单（线上反馈）。现在这种情况要
+        **补进本群名单**，所以这里改成先在名单里放一个人，才叫真的「已实名」。
+        """
         enable_all(tmp_db)
+        tmp_db.upsert_member_task(GROUP, PHONE, nickname="测试用户")
         backend = FakeBackend()          # 默认目录里已有姓名 = 已实名过
         client, sender, _ = make_client(tmp_db, backend=backend)
         resp = client.post("/api/callback", json=callback_payload("实名"))

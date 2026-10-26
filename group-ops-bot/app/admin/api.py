@@ -1582,7 +1582,16 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         _require_password_changed(identity)
         _require_csrf(request, identity)
         if state.get_group_config(group_id) is None:
-            raise HTTPException(status_code=404, detail="群聊不存在或已移除")
+            # ⭐ D43（2026-10-26 用户反馈）：机器人被拉进群后、还没绑定就被移出，
+            # 后台那行 WAIT_BIND 永远删不掉（旧实现一律 404，可前端按钮是亮的）。
+            # 这里补一条：没有 group_config 的群 -> 清掉「发现账本 + 实例行」即可。
+            forgotten = state.forget_unbound_group(group_id)
+            if not any(forgotten.values()):
+                raise HTTPException(status_code=404, detail="群聊不存在或已移除")
+            _audit(state, request, identity, "robot_instance.forget_unbound",
+                   "robot_instance", group_id, forgotten)
+            return {"ok": True, "message": "未绑定群记录已移除",
+                    "removed": forgotten}
         removed = state.delete_group_cascade(group_id)
         _audit(state, request, identity, "robot_instance.remove",
                "robot_instance", group_id, removed)

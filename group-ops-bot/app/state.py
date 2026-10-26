@@ -1355,6 +1355,28 @@ class StateStore:
                 counts[table] = cur.rowcount
         return counts
 
+    def forget_unbound_group(self, group_id: str) -> dict:
+        """移除「发现过但从未绑定」的群（D43，2026-10-26 用户反馈）。
+
+        场景：机器人被拉进群，T0 回调把群登记成 `qmx_robot_instance(WAIT_BIND)`
+        + `group_seen` 一条；随后群主又把机器人移出，后台就永远挂着一行「待绑定」。
+        `delete_group_cascade` 只对**已绑定**的群生效，于是后台那个「移除群聊」
+        按钮点下去只会 404。
+
+        ⛔ 本方法只处理没有 `group_config` 的群（返回 {} 表示拒绝）；
+        已绑定的群必须走 `delete_group_cascade`（还要清名单 / 授权 / 字段池 /
+        调度残留），否则会留下僵尸数据。
+        """
+        if self.get_group_config(group_id) is not None:
+            return {}
+        counts: dict = {}
+        with self._conn:
+            for table in ("qmx_robot_instance", "group_seen"):
+                cur = self._conn.execute(
+                    "DELETE FROM %s WHERE group_id=?" % table, (group_id,))
+                counts[table] = cur.rowcount
+        return counts
+
     def list_member_tasks(self, group_id: str,
                           enabled_only: bool = False) -> Iterable[sqlite3.Row]:
         sql = "SELECT * FROM group_member_task_config WHERE group_id=?"

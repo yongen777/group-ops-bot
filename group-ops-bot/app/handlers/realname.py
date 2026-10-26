@@ -59,6 +59,13 @@ FORMAT_ERROR_TEXT = ("输入格式有误。请重新发送「姓名 手机号」
 ALREADY_REGISTERED_TEXT = ("您已完成实名登记（姓名：{name}，手机号：{masked}），"
                            "无需重复提交；如需变更请联系后台管理员。")
 
+# ⭐ D43（2026-10-26 用户反馈）：跨群已实名的人在新群发「实名」时，本群名单
+# 还是空的 —— 旧实现直接回「已完成登记」，于是**他永远进不了本群名单**，
+# 后台「群成员」里看不到人。现在改为：先把他补进本群名单，再回这条。
+HEALED_INTO_ROSTER_TEXT = (
+    "✅ 已为您加入本群名单（姓名：{name}，手机号：{masked}）。\n"
+    "现在可以直接使用打卡 / 总结 / 报数。如需变更信息请联系后台管理员。")
+
 CANCELED_TEXT = "已取消实名登记。"
 
 # ⭐ D36：实名填了别人的号（人员目录里已有别人的姓名）—— ⛔ 不覆盖、不合并
@@ -299,6 +306,16 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
 
     existing = _registered_user(ctx)
     if existing is not None:
+        # ⭐ D43（2026-10-26 线上反馈：新群里郑佳发「实名」只收到「已完成登记」，
+        # 后台本群成员里却始终没有他）：`_registered_user` 在**名单为空**的新群
+        # 也会判成「已实名」（它只查全局档案姓名），于是入册那一步被这句回执挡死。
+        # 口径：只要本群名单里**没有**他，就先把全局档案补进名单，再回执。
+        if _roster_verdict(ctx) is not True:
+            healed = _auto_heal_into_roster(ctx)
+            if healed:
+                return HEALED_INTO_ROSTER_TEXT.format(
+                    name=existing["name"].strip(),
+                    masked=_mask(existing.get("phone") or ctx.phone))
         return ALREADY_REGISTERED_TEXT.format(
             name=existing["name"].strip(),
             masked=_mask(existing.get("phone") or ctx.phone))
