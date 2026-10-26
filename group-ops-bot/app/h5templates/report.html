@@ -100,6 +100,11 @@
   var seq = 0;            // 行 id 自增（⛔ 不用数组下标，删行后下标会串）
   var verifyTail = "";    // 本人手机号后 4 位（身份绑定，服务端强制校验）
   var verified = false;
+  // ⭐ D46（2026-10-26 用户报障）：提交成功必须进入「终态」。
+  // 旧实现只在成功回调里把 submitBtn 置灰，但 refreshSubmitState() 每次
+  // 改动都会重算 —— 用户点一下「验证身份」或改个数量，按钮就又亮了，
+  // 页面看起来像「没退出」，还能再提一次（后端虽拦得住，体验是错的）。
+  var submitted = false;
 
   function fieldLabel(f) {
     return f.unit ? (f.field_name + "（" + f.unit + "）") : f.field_name;
@@ -126,10 +131,26 @@
   }
 
   function refreshSubmitState() {
+    if (submitted) {          // 已提交：⛔ 任何重算都不许再把按钮点亮
+      $("submitBtn").disabled = true;
+      return;
+    }
     var valid = rows.length > 0 && rows.every(function (row) {
       return row.fieldId !== "" && /^\d+$/.test(String(row.qty).trim());
     });
     $("submitBtn").disabled = !valid || !verified;
+  }
+
+  // ⭐ D46：提交成功 -> 整页锁成终态（不再可填、不再可提交、可关闭）
+  function lockSubmitted(message) {
+    submitted = true;
+    var card = $("verifyCard");
+    if (card) { card.style.display = "none"; }   // 已提交，无需再核验身份
+    $("fields").innerHTML = '<div class="empty">本次报数已提交完成，无需重复提交。</div>';
+    $("addBtn").disabled = true;
+    $("submitBtn").disabled = true;
+    $("submitBtn").textContent = "已提交";
+    say(message || "✅ 报数已提交成功，本次链接已使用完毕，可关闭页面。", "ok");
   }
 
   // ⭐ 2026-10-20 修复（用户报障：点删除不立即消失 / 点添加反而少一行）：
@@ -203,6 +224,7 @@
   }
 
   function addRow() {
+    if (submitted) { return; }        // ⭐ D46：已提交后⛔ 不允许再改
     if (rows.length >= 50) { say("一次最多添加 50 个字段。", "warn"); return; }
     rows.push({ id: ++seq, fieldId: "", qty: "" });
     render();
@@ -245,6 +267,7 @@
   });
 
   $("verifyBtn").addEventListener("click", function () {
+    if (submitted) { return; }        // ⭐ D46：已提交后⛔ 不再接受重新验证
     var tail = ($("verifyInput").value || "").trim();
     if (!/^[0-9]{4}$/.test(tail)) {
       $("verifyMsg").textContent = "请填写 4 位数字（本人手机号后 4 位）。";
@@ -277,6 +300,7 @@
   });
 
   $("submitBtn").addEventListener("click", function () {
+    if (submitted) { return; }        // ⭐ D46：已提交后⛔ 不再发请求
     var items = [];
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i];
@@ -299,10 +323,11 @@
     post("/api/h5/report/submit",
          { token: token, items: items, verify: verifyTail })
       .then(function (data) {
-        say(data.message || "", data.ok ? "ok" : (data.kind === "C" ? "warn" : "err"));
+        // ⭐ D46：成功（含「已成功提交过」的重复提交）一律进终态，⛔ 不再留可交互表单
         if (data.ok) {
-          $("submitBtn").disabled = true;
-          $("addBtn").disabled = true;
+          lockSubmitted(data.message);
+        } else {
+          say(data.message || "", data.kind === "C" ? "warn" : "err");
         }
         if (data && data.reason === "holder_mismatch") {
           verified = false;

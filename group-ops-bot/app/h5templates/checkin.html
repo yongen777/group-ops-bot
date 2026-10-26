@@ -101,6 +101,10 @@
   var expiresAt = null;   // Date 对象；链接过期时刻（服务端口径）
   var expired = false;
   var countdownTimer = null;
+  // ⭐ D46（2026-10-26）：提交成功后必须锁成终态。旧实现只把 submitBtn 置灰，
+  // 但「拍照/选图」仍可点 —— 上传成功回调会把 submitBtn 重新点亮，页面看起来
+  // 像「没退出」，还能再提交一次（后端拦得住，体验是错的）。
+  var submitted = false;
 
   function $(id) { return document.getElementById(id); }
   function say(text, cls) {
@@ -139,11 +143,30 @@
     $("verifyMsg").className = "sub warn";
   }
   function unlockActions() {
+    if (submitted) { return; }     // ⭐ D46：已提交后⛔ 不再解锁任何操作
     $("cameraBtn").disabled = false;
     $("galleryBtn").disabled = false;
     $("submitBtn").disabled = !imageRef;
     $("verifyMsg").textContent = "身份信息已填写，上传时由服务器核验（不匹配会被拒绝）。";
     $("verifyMsg").className = "sub ok";
+  }
+
+  // ⭐ D46：提交成功 -> 整页锁成终态（不再可上传、不再可提交、可关闭）
+  function lockSubmitted(message) {
+    submitted = true;
+    if (countdownTimer) { clearInterval(countdownTimer); }
+    $("cameraBtn").disabled = true;
+    $("galleryBtn").disabled = true;
+    $("submitBtn").disabled = true;
+    $("submitBtn").textContent = "已提交";
+    $("verifyBtn").disabled = true;
+    $("verifyInput").disabled = true;
+    var vc = $("verifyCard");
+    if (vc) { vc.style.display = "none"; }
+    var uc = $("uploadCard");
+    if (uc) { uc.style.display = "none"; }
+    $("state").textContent = "已完成";
+    say(message || "✅ 打卡已提交成功，本次链接已使用完毕，可关闭页面。", "ok");
   }
   function tickCountdown() {
     if (!expiresAt) { return; }
@@ -217,6 +240,7 @@
       .then(function (data) {
         if (data && data.ok && data.image_ref) {
           imageRef = data.image_ref;
+          if (submitted) { return; }   // ⭐ D46：已提交后⛔ 不再点亮提交按钮
           $("submitBtn").disabled = false;
           say("图片已上传，可以提交。", "ok");
         } else if (data && data.reason === "holder_mismatch") {
@@ -248,14 +272,19 @@
   });
 
   $("submitBtn").addEventListener("click", function () {
+    if (submitted) { return; }        // ⭐ D46：已提交后⛔ 不再发请求
     if (!imageRef) { say("请先上传打卡图片。", "warn"); return; }
     if (!verified) { say("请先填写本人手机号后 4 位完成身份核验。", "warn"); return; }
     say("正在提交…", "");
     post("/api/h5/checkin/submit",
          { token: token, image_ref: imageRef, verify: verifyTail })
       .then(function (data) {
-        say(data.message || "", data.ok ? "ok" : (data.kind === "C" ? "warn" : "err"));
-        if (data.ok) { $("submitBtn").disabled = true; $("state").textContent = "已完成"; }
+        // ⭐ D46：成功（含「已成功提交过」的重复提交）一律进终态
+        if (data.ok) {
+          lockSubmitted(data.message);
+        } else {
+          say(data.message || "", data.kind === "C" ? "warn" : "err");
+        }
         if (data && data.reason === "holder_mismatch") {
           verified = false;
           verifyTail = "";
