@@ -342,24 +342,33 @@ class TestRenameMemberTransaction:
 
 
 class TestRealnameSyncsLearnedUser:
-    def test_same_phone_updates_learned_name(self, tmp_db):
-        """实名手机号 = 平台身份 -> 本地展示名同步（提醒里⛔ 不再用旧昵称）。"""
+    def test_name_only_updates_learned_name(self, tmp_db):
+        """⭐ D45：只发姓名 -> 号码取平台身份，本地展示名同步（提醒里⛔ 不用旧昵称）。
+
+        原用例名 `test_same_phone_updates_learned_name`，发的是「张三 <本人号>」。
+        D45 之后号码由平台决定，且 `_phone_conflict` 不再按「号 == 自己」短路
+        （否则撞号检测永远不触发），所以这里必须让目录里**还没有他**，
+        才能走到「首次登记」这条正路。
+        """
         enable_all(tmp_db)
-        ctx = make_ctx(tmp_db, FakeBackend(),
+        backend = FakeBackend()
+        backend.results["user_get"] = {"user": None}   # 目录里还没有这个人
+        ctx = make_ctx(tmp_db, backend,
                        make_config(Path(str(tmp_db.db_path)).parent),
                        now=NOW, phone=REAL_PHONE)
         tmp_db.put_pending_session(GROUP, REAL_PHONE, realname_handler.BIZ,
                                    None, NOW, ttl_minutes=10)
-        ctx.text = "张三 %s" % REAL_PHONE
+        ctx.text = "张三"
         reply = realname_handler.handle_pending_text(ctx)
         assert "已成功录入" in reply
         assert tmp_db.user_display_name(REAL_PHONE) == "张三"
 
-    def test_mismatched_phone_does_not_touch_learned_name(self, tmp_db):
-        """手机号与平台身份不一致 -> ⛔ 不改本地展示名（只留安全事件）。
+    def test_mismatched_phone_is_rejected(self, tmp_db):
+        """⭐ D45（2026-10-26 用户指令）：手输号码 ≠ 平台身份 -> ⛔ 直接拒。
 
-        ⚠️ D36（2026-10-22 单人单号）：填**别人已占用**的号会被直接拒绝，
-        所以这里必须让目标号在目录里没有姓名，才能测到"号码不一致但不撞号"。
+        旧口径（D31）是「照样录入、只记安全事件、不改展示名」—— 那等于允许
+        把别人的号配到自己名下。现在改为**先校验号码**：不一致就拒绝，
+        ⛔ 不写 sys_user、⛔ 不改展示名，会话保留让用户重发（只需发姓名）。
         """
         enable_all(tmp_db)
         backend = FakeBackend()
@@ -370,8 +379,13 @@ class TestRealnameSyncsLearnedUser:
         tmp_db.put_pending_session(GROUP, REAL_PHONE, realname_handler.BIZ,
                                    None, NOW, ttl_minutes=10)
         ctx.text = "张三 13800000002"
-        assert "已成功录入" in realname_handler.handle_pending_text(ctx)
+        reply = realname_handler.handle_pending_text(ctx)
+        assert reply == realname_handler.PHONE_MISMATCH_TEXT
+        assert not [c for c in backend.calls if c[0] == "user_upsert"]
         assert tmp_db.user_display_name(REAL_PHONE) is None
+        # 会话保留：用户可以只发姓名重来
+        assert tmp_db.get_pending_session(
+            GROUP, REAL_PHONE, realname_handler.BIZ, NOW) is not None
 
 
 # =====================================================================

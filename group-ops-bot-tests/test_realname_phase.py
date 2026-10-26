@@ -113,11 +113,12 @@ class TestRealName:
                            json=callback_payload("实名"))
         assert resp.json()["replied"] is True
         text = sender.sent[-1]["text"]
-        assert "请发送您的「姓名 手机号」" in text
+        assert "请发送您的真实姓名" in text
         assert "10 分钟内有效" in text
-        # ⭐ 2026-10-20 用户指令：示例统一写成「xx 手机号」（⛔ 拿真人当模板）
-        assert "例如：xx 手机号" in text
-        assert "郑佳 13800000000" not in text
+        # ⭐ D45（2026-10-26）：⛔ 再要求手输手机号；示例⛔ 拿真人当模板
+        assert "例如：张三" in text
+        assert "手机号会自动取" in text
+        assert "郑佳" not in text
         row = pending_realname(tmp_db)
         assert row is not None and row["biz"] == "realname"
         assert row["ttl_minutes"] == 10
@@ -129,17 +130,17 @@ class TestRealName:
         backend = unregistered_backend()
         client, sender, _ = make_client(tmp_db, backend=backend)
         client.post("/api/callback", json=callback_payload("实名"))
-        resp = client.post("/api/callback",
-                           json=callback_payload("%s %s" % (NAME, REAL_PHONE)))
+        # ⭐ D45：只发姓名，手机号自动取平台推来的身份（PHONE）
+        resp = client.post("/api/callback", json=callback_payload(NAME))
         assert resp.json()["replied"] is True
         assert "实名信息已成功录入" in sender.sent[-1]["text"]
         # 手机号脱敏：前 3 + **** + 后 4，⛔ 不回显完整号码
-        assert "138****0001" in sender.sent[-1]["text"]
-        assert REAL_PHONE not in sender.sent[-1]["text"]
+        assert "138****8009" in sender.sent[-1]["text"]
+        assert PHONE not in sender.sent[-1]["text"]
         # 写 sys_user（带 group_id，供 operation_log 留痕）
         calls = [c for c in backend.calls if c[0] == "user_upsert"]
         assert len(calls) == 1
-        assert calls[0][1]["phone"] == REAL_PHONE
+        assert calls[0][1]["phone"] == PHONE
         assert calls[0][1]["name"] == NAME
         assert calls[0][1]["group_id"] == GROUP
         # 名单姓名同步（角色/启用状态保持）
@@ -156,7 +157,7 @@ class TestRealName:
         client, _, _ = make_client(tmp_db, backend=backend)
         client.post("/api/callback", json=callback_payload("实名"))
         client.post("/api/callback",
-                    json=callback_payload("%s      %s" % (NAME, REAL_PHONE)))
+                    json=callback_payload("%s      %s" % (NAME, PHONE)))
         assert [c for c in backend.calls if c[0] == "user_upsert"]
 
     def test_invalid_phone_keeps_session(self, tmp_db):
@@ -219,7 +220,7 @@ class TestPausedMember:
         client, sender, _ = make_client(tmp_db, backend=unregistered_backend())
         resp = client.post("/api/callback", json=callback_payload("实名"))
         assert resp.json()["replied"] is True
-        assert "请发送您的「姓名 手机号」" in sender.sent[-1]["text"]
+        assert "请发送您的真实姓名" in sender.sent[-1]["text"]
 
     def test_already_registered_gets_blocked(self, tmp_db):
         """⭐ 2026-10-20 用户指令：已实名过再发「实名」-> 拦住，⛔ 不重复登记。

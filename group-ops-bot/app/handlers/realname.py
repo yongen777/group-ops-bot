@@ -3,11 +3,12 @@
 
 口径（与绑定/总结两轮同一套 pending_session 机制，⛔ 不另造状态机）：
 - 第 1 轮：群内精确发送「实名」-> 挂 `WAITING_REAL_NAME_INFO` 会话（10 分钟）
-           -> 提示发送「姓名 手机号」
-- 第 2 轮：下一条文本按「姓名 + 手机号」解析
+           -> 提示发送真实姓名（⭐ D45：手机号由平台回调自带，⛔ 不要用户手输）
+- 第 2 轮：下一条文本按「姓名」解析（⭐ D45：手机号取平台推送值）
            - 「取消」-> 清会话 + 已取消回执
            - 格式不符 -> **保留会话** + 固定纠错话术
-           - 通过 -> 写 sys_user（按解析出的手机号 upsert 姓名）
+           - 手输号码 ≠ 平台身份 -> **拒绝** + 留痕（⛔ 不写库，防把别人的号配到自己名下）
+           - 通过 -> 写 sys_user（手机号 = 平台身份）
                      + 同步本群名单里的姓名（仅对已存在的名单行）
                      + operation_log 留痕（MCP 侧 user.upsert 内写）
                      + 清会话 + 脱敏回执
@@ -40,20 +41,24 @@ TTL_MINUTES = 10
 
 CANCEL_TEXT = "取消"
 
-# ⭐ 2026-10-20 用户指令：示例 ⛔ 不再拿真人姓名/号码当模板，统一写「xx 手机号」
-_ASK_EXAMPLE = "（例如：xx 手机号）"
+# ⭐ D45（2026-10-26 用户指令）：手机号由平台回调自带（实测 payload 顶层 phone），
+# ⛔ 不再要求用户手输 —— 手输只会带来「输错 / 输成别人号」两类风险。
+# 示例 ⛔ 不拿真人姓名当模板（沿用 2026-10-20 口径）。
+_ASK_EXAMPLE = "（例如：张三）"
 
-# ⭐ 2026-10-20 用户指令：实名引导必须提醒「手机号 = 软件注册手机号」
-_PHONE_HINT = "（填报手机号一定和软件注册手机号一致）"
-
-ASK_TEXT = ("请发送您的「姓名 手机号」%s\n"
-            "%s\n"
+ASK_TEXT = ("请发送您的真实姓名%s\n"
+            "手机号会自动取您在软件里注册的号码，无需填写。\n"
             "%d 分钟内有效；如需放弃请回复：取消"
-            % (_ASK_EXAMPLE, _PHONE_HINT, TTL_MINUTES))
+            % (_ASK_EXAMPLE, TTL_MINUTES))
 
-FORMAT_ERROR_TEXT = ("输入格式有误。请重新发送「姓名 手机号」%s\n"
-                     "%s\n"
-                     "或回复：取消" % (_ASK_EXAMPLE, _PHONE_HINT))
+FORMAT_ERROR_TEXT = ("输入格式有误。请重新发送您的真实姓名%s\n"
+                     "（2~20 位汉字或英文字母，⛔ 不需要填手机号）\n"
+                     "或回复：取消" % _ASK_EXAMPLE)
+
+# ⭐ D45：手输了手机号但与平台身份不一致 -> ⛔ 直接拒（防把别人的号配到自己名下）
+PHONE_MISMATCH_TEXT = (
+    "⚠️ 您填写的手机号与软件注册的号码不一致，为避免录错已拒绝本次提交。\n"
+    "请只发送您的真实姓名（手机号会自动取注册号码）；如需变更号码请联系管理员。")
 
 # ⭐ 2026-10-20 用户指令：已实名过的人再发「实名」-> 直接拦住（⛔ 不重复登记）
 ALREADY_REGISTERED_TEXT = ("您已完成实名登记（姓名：{name}，手机号：{masked}），"
@@ -70,8 +75,8 @@ CANCELED_TEXT = "已取消实名登记。"
 
 # ⭐ D36：实名填了别人的号（人员目录里已有别人的姓名）—— ⛔ 不覆盖、不合并
 PHONE_TAKEN_TEXT = (
-    "⚠️ 该手机号已被其他人员登记，无法重复实名。\n"
-    "请填写「本人」的手机号重新提交（格式：姓名 手机号），如需申诉请联系管理员。")
+    "⚠️ 您当前登录的手机号已被其他人员登记，无法重复实名。\n"
+    "请勿再次提交，如需申诉请联系管理员核对。")
 
 EXPIRED_TEXT = ("实名登记等待已超时（%d 分钟无操作）已结束，"
                 "请重新发送「实名」。" % TTL_MINUTES)
@@ -83,7 +88,8 @@ EXPIRED_TEXT = ("实名登记等待已超时（%d 分钟无操作）已结束，
 # ⚠️ 默认常开：⛔ 不设群级开关，固定生效。
 REQUIRE_REALNAME_TEXT = (
     "⚠️ 系统里还没有您的实名信息，暂时无法使用该功能。\n"
-    "请先发送「@机器人 实名」完成登记（姓名 + 手机号），登记成功后即可正常使用。")
+    "请先发送「@机器人 实名」完成登记（只需发送姓名，手机号自动取注册号码），"
+    "登记成功后即可正常使用。")
 
 # 受该闸门约束的业务命令（导出走后白名单权限、帮助不拦、绑定/实名本身不拦）
 # ⭐ D44（2026-10-26 用户反馈）：导出也纳入 —— 未实名的人本来就没导出授权，
@@ -173,15 +179,22 @@ def registered_state(ctx: HandlerContext) -> Optional[bool]:
 
 
 def _phone_conflict(ctx: HandlerContext, phone: str) -> Optional[dict]:
-    """该手机号是否已被**别人**实名占用（单人单号口径）。
+    """该手机号在人员目录里是否已登记**姓名**（单人单号口径）。
 
     返回占用者 dict 表示冲突；None 表示可用：
-    - 号码就是自己的平台身份 -> 不冲突（本人补登记）
-    - 目录里有该号但姓名为空 -> 不冲突（历史遗留，可补录）
+    - 目录里没有该号 / 该号姓名为空 -> 不冲突（本人首次登记或补录）
+    - 该号已有姓名 -> 冲突（⛔ 不覆盖，落待办让管理员核对）
     - 后端不可用 -> None（fail-open，⛔ 不因抖动挡住实名）
+
+    ⭐ D45（2026-10-26）口径变更：`phone` 现在**恒等于 `ctx.phone`**
+    （号码由平台决定，用户不再手输），所以旧版的
+    「号码就是自己的平台身份 -> 不冲突」必须删掉 —— 留着会让撞号检测
+    永远不触发，历史上被错误姓名污染过的号就再也纠正不了。
+
+    安全性：本人重复实名走不到这里（`handle_command` 阶段已按
+    `_registered_user` 回「已完成登记」/补入册），因此本函数只会遇到
+    「该号已属于别人的姓名」这种情况。
     """
-    if phone == ctx.phone:
-        return None
     try:
         user = (ctx.backend.user_get(phone=phone) or {}).get("user")
     except Exception:
@@ -269,11 +282,17 @@ def _registered_user(ctx: HandlerContext) -> Optional[dict]:
 
 
 def parse_realname(text: str) -> Optional[tuple]:
-    """「姓名 手机号」-> (name, phone)；不合法返回 None。
+    """第二轮输入 -> (name, typed_phone)；不合法返回 None。
 
-    姓名与手机号之间允许 1 个或多个普通空格/制表符（⛔ 不允许多余字段）。
+    ⭐ D45（2026-10-26 用户指令）：手机号由平台回调自带，⛔ 不再要求手输。
+    - 只发「姓名」一段 -> (name, None)，调用方用 ctx.phone 兜底
+    - 「姓名 手机号」两段 -> (name, phone)，**仅供一致性校验**（见调用方）
+    字段之间允许 1 个或多个普通空格/制表符；⛔ 不允许多余字段。
     """
     parts = re.split(r"[ \t\u3000]+", (text or "").strip())
+    parts = [x for x in parts if x]
+    if len(parts) == 1:
+        return (parts[0], None) if _NAME_RE.match(parts[0]) else None
     if len(parts) != 2:
         return None
     name, phone = parts[0], parts[1]
@@ -302,7 +321,7 @@ def has_pending(ctx: HandlerContext) -> bool:
 
 
 def handle_command(parsed, ctx: HandlerContext) -> str:
-    """第 1 轮：挂 10 分钟会话 + 引导发送「姓名 手机号」。
+    """第 1 轮：挂 10 分钟会话 + 引导发送真实姓名（⭐ D45：手机号自动取平台值）。
 
     ⭐ 2026-10-20 用户指令：已实名过的人再发「实名」-> 直接拦住并回显脱敏
     信息（⛔ 不重复登记、⛔ 不重复写 upsert / 审计）。
@@ -360,7 +379,16 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
     if parsed is None:
         # ⛔ 保留会话：用户可直接重发，不必再发一次「实名」
         return FORMAT_ERROR_TEXT
-    name, phone = parsed
+    name, typed_phone = parsed
+
+    # ⭐ D45：手机号以**平台推送的身份**为准；手输值只做一致性校验，
+    # ⛔ 不接受改成别的号码（否则能把别人的号配到自己名下）。
+    if typed_phone and typed_phone != ctx.phone:
+        ctx.state.record_security_event(
+            "realname_phone_mismatch", ctx.group_id, ctx.phone,
+            "typed phone differs from platform identity")
+        return PHONE_MISMATCH_TEXT
+    phone = ctx.phone
 
     # ⭐ D36（2026-10-22 用户指令）：实名也要防撞号（单人单号）。
     # 若输入的号码在人员目录里**已经有别人的姓名**，直接拒绝并留痕 ——
@@ -399,19 +427,13 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
             role=report_handler.DEFAULT_ROLE, enabled=True,
             source="realname")
 
-    # 解析出的手机号与平台身份不一致：如实留痕（⛔ 不拦，业务记录仍按平台身份）
-    if phone != ctx.phone:
-        ctx.state.record_security_event(
-            "realname_phone_mismatch", ctx.group_id, ctx.phone,
-            "registered phone differs from platform identity")
-    else:
-        # ⭐ D31 修复 5（2026-10-21）：号码与平台身份一致时，把姓名同步进
-        # 本地 `learned_user` —— 否则提醒/看板里同一个人的显示名会「实名写
-        # 的是真名、@ 时还是旧昵称」两套口径（learned_user 是展示名首选源）。
-        try:
-            ctx.state.learn_user(ctx.phone, name, ctx.platform_user_id)
-        except Exception:  # 展示名同步失败⛔ 不影响实名主流程与回执
-            pass
+    # ⭐ D45：号码恒等于平台身份（上面已校验），无条件把姓名同步进本地
+    # `learned_user` —— 否则提醒/看板里同一个人的显示名会「实名写的是真名、
+    # @ 时还是旧昵称」两套口径（learned_user 是展示名首选源）。
+    try:
+        ctx.state.learn_user(ctx.phone, name, ctx.platform_user_id)
+    except Exception:  # 展示名同步失败⛔ 不影响实名主流程与回执
+        pass
 
     ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)
     return success_text(name, phone)

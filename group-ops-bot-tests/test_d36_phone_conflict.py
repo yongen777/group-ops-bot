@@ -68,40 +68,48 @@ def _start_realname(tmp_db):
 
 class TestRealnameConflict:
     def test_rejects_phone_owned_by_someone_else(self, tmp_db):
-        """填别人的号：⛔ 拒绝 + ⛔ 不写库（不能覆盖别人的姓名）。"""
+        """⭐ D45 后撞号的唯一入口：**平台身份号**在目录里已是别人的姓名。
+
+        （旧版本靠「用户手输别人的号」触发；现在手输不一致会先在
+        PHONE_MISMATCH_TEXT 被拦，所以撞号只剩这一种真实场景：
+        历史上被别的姓名污染过、或号码被回收再分配。）
+        ⛔ 拒绝 + ⛔ 不写库（不能覆盖别人的姓名）。
+        """
         backend = ScriptedBackend({
-            OTHER_PHONE: {"user": {"id": 9, "phone": OTHER_PHONE,
-                                   "name": "李四"}}})
+            PHONE: {"user": {"id": 9, "phone": PHONE, "name": "李四"}}})
         client, _b, sender = _bot(tmp_db, backend)
         _start_realname(tmp_db)
-        _say(client, "张三 " + OTHER_PHONE)
+        _say(client, "张三")
         assert _last(sender) == realname_handler.PHONE_TAKEN_TEXT
         assert not [c for c in backend.calls if c[0] == "user_upsert"]
 
     def test_conflict_recorded_as_todo(self, tmp_db):
         backend = ScriptedBackend({
-            OTHER_PHONE: {"user": {"id": 9, "name": "李四"}}})
+            PHONE: {"user": {"id": 9, "name": "李四"}}})
         client, _b, _s = _bot(tmp_db, backend)
         _start_realname(tmp_db)
-        _say(client, "张三 " + OTHER_PHONE)
+        _say(client, "张三")
         conflicts = tmp_db.list_phone_conflicts(GROUP)
         assert len(conflicts) == 1
-        assert conflicts[0]["phone"] == OTHER_PHONE
+        assert conflicts[0]["phone"] == PHONE
         assert conflicts[0]["kind"] == "realname"
         assert "李四" in (conflicts[0]["detail"] or "")
 
-    def test_session_kept_so_user_can_retry(self, tmp_db):
-        """撞号后⛔ 不踢出会话：用户可直接重发自己的号。"""
+    def test_session_kept_but_cannot_self_heal(self, tmp_db):
+        """⭐ D45：撞号后会话保留（还能发「取消」），但重发姓名也救不了。
+
+        旧版本这里断言「换成自己的平台号就成功」——现在号码由平台决定，
+        用户没有任何可换的余地，只能找管理员核对。
+        """
         backend = ScriptedBackend({
-            OTHER_PHONE: {"user": {"id": 9, "name": "李四"}}})
+            PHONE: {"user": {"id": 9, "name": "李四"}}})
         client, _b, sender = _bot(tmp_db, backend)
         _start_realname(tmp_db)
-        _say(client, "张三 " + OTHER_PHONE)
+        _say(client, "张三")
         assert tmp_db.get_pending_session(GROUP, PHONE, "realname", NOW) is not None
-        # 换成自己的平台号 -> 成功
-        _say(client, "张三 " + PHONE)
-        assert _last(sender) != realname_handler.PHONE_TAKEN_TEXT
-        assert [c for c in backend.calls if c[0] == "user_upsert"]
+        _say(client, "张三")
+        assert _last(sender) == realname_handler.PHONE_TAKEN_TEXT
+        assert not [c for c in backend.calls if c[0] == "user_upsert"]
 
     def test_own_phone_with_empty_name_is_allowed(self, tmp_db):
         """目录里有该号但没姓名（历史遗留）-> 允许补录。"""
