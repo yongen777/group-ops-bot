@@ -242,10 +242,16 @@ class TestAdminWording:
     """用户指令 5：群管理员 ≠ 后台管理员，回复文本一律说「后台管理员」。"""
 
     def test_help_text_uses_backend_admin_qualifier(self):
+        """⭐ D44（2026-10-26）：只有「导出」保留「仅后台授权的管理员可用」。
+
+        绑定自 D28 起对全员开放（UNBOUND_TEXT 已写「本群任一成员均可操作」），
+        帮助文案过去还写着「仅后台授权」，用户看到后误以为绑定仍是管理员专属。
+        """
         assert "（仅后台授权的管理员可用）" in commands.HELP_TEXT
-        assert commands.HELP_TEXT.count("（仅后台授权的管理员可用）") == 2
+        assert commands.HELP_TEXT.count("（仅后台授权的管理员可用）") == 1
+        assert "「绑定」将本群接入机器人（本群任一成员均可操作）" in commands.HELP_TEXT
         assert "（仅管理员可用）" not in commands.HELP_TEXT
-        # 绑定成功后的命令清单与帮助文案同源（⛔ 不能一处改一处漏）
+        # 绑定成功后的命令清单只剩「导出」一行带该括注（清单里本来就不含绑定）
         assert "（仅后台授权的管理员可用）" in \
             bind_handler.BOUND_COMMANDS_GUIDE
 

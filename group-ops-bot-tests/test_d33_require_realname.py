@@ -10,8 +10,12 @@
 因此本文件钉死：
 1. 判定真源 = **本群成员名单**（`group_member_task_config`），⛔ 不查 MySQL 姓名；
 2. **常开**，⛔ 无群级开关；
-3. 只拦三个业务命令（打卡 / 总结 / 报数）；实名/绑定/导出/帮助/闲聊⛔ 不拦；
-4. **名单为空 = 该群还没治理**，此时放行（否则新群全员被挡）；
+3. 拦的是一组**业务命令**（打卡 / 总结 / 报数 / 导出）；实名/绑定/帮助⛔ 不拦
+   （⭐ D44 起「导出」也纳入 —— 未实名本来就没导出授权，回实名提示更有用）
+4. **名单为空 = 该群还没治理**：⭐ D44（2026-10-26 用户反馈）改口径 —— 空名单群
+   也走一次全局档案自愈：有姓名则入册放行，没有则拦下引导实名。
+   旧口径「空名单一律放行且不入册」会让新群里的人发命令被放行、却永远进不了
+   名单（用户原话：「未执行实名录入到群成员，且后台也没有任何记录」）。
 5. 实名成功 -> **自动进名单**（否则「不在名单→提示实名→实名又不进名单」死循环）。
 """
 
@@ -60,10 +64,20 @@ def _last_text(sender):
 # ---------- 1. 名单为空：不拦（新群还没治理） ----------
 
 class TestEmptyRoster:
-    def test_empty_roster_passes(self, tmp_db):
+    def test_empty_roster_without_global_name_is_blocked(self, tmp_db):
+        """⭐ D44：空名单 + 全局档案也没有他 -> 拦下并引导实名（⛔ 不再静默放行）。"""
         client, _b, sender = _client(tmp_db)
         _say(client, "打卡")
+        assert _last_text(sender) == realname_handler.REQUIRE_REALNAME_TEXT
+
+    def test_empty_roster_with_global_name_heals(self, tmp_db):
+        """⭐ D44：空名单 + 全局档案有姓名 -> 无感入册并放行（后台立刻可见）。"""
+        client, backend, sender = _client(tmp_db)
+        backend.results["user_get"] = {"user": {"id": 7, "name": "郑佳"}}
+        _say(client, "打卡")
         assert _last_text(sender) != realname_handler.REQUIRE_REALNAME_TEXT
+        row = tmp_db.get_member_task(GROUP, PHONE)
+        assert row is not None and row["source"] == "auto_heal"
 
 
 # ---------- 2. 名单非空：在册放行、不在册拦 ----------
@@ -115,10 +129,11 @@ class TestExemptions:
         _say(client, "今天天气不错")
         assert _last_text(sender) != realname_handler.REQUIRE_REALNAME_TEXT
 
-    def test_export_not_gated_by_realname(self, tmp_db):
+    def test_export_is_gated_by_realname(self, tmp_db):
+        """⭐ D44：导出也纳入实名闸门（未实名 -> 先实名，而不是「无导出权限」）。"""
         client, _b, sender = _client(tmp_db, roster=["13800138099"])
         _say(client, "导出")
-        assert _last_text(sender) != realname_handler.REQUIRE_REALNAME_TEXT
+        assert _last_text(sender) == realname_handler.REQUIRE_REALNAME_TEXT
 
 
 # ---------- 4. 实名成功后自动进名单（闭环，⛔ 不能死循环） ----------
@@ -228,13 +243,19 @@ class TestAutoHeal:
         assert _last_text(sender) == realname_handler.REQUIRE_REALNAME_TEXT
         assert tmp_db.get_member_task(GROUP, PHONE) is None
 
-    def test_empty_roster_does_not_heal(self, tmp_db):
-        """名单为空的群（未治理）放行但⛔ 不入册，避免凭空写成员。"""
+    def test_empty_roster_heals_into_roster(self, tmp_db):
+        """⭐ D44 改口径：空名单群也自愈入册（旧口径是「放行但不入册」）。
+
+        用户线上反馈：新群里的人发命令被放行，但**后台一条记录都没有**，
+        因为他永远进不了名单。
+        """
         client, backend, sender = _client(tmp_db)   # 空名单
         backend.results["user_get"] = {"user": {"id": 7, "name": "郑佳"}}
         _say(client, "打卡")
         assert _last_text(sender) != realname_handler.REQUIRE_REALNAME_TEXT
-        assert tmp_db.get_member_task(GROUP, PHONE) is None
+        row = tmp_db.get_member_task(GROUP, PHONE)
+        assert row is not None, "必须入册，否则后台永远看不到这个人"
+        assert row["source"] == "auto_heal"
 
     def test_visible_in_admin_members_api(self, tmp_db):
         """自愈后，后台 `GET /api/admin/groups/{gid}/members` 立即可见。"""

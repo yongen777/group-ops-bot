@@ -86,8 +86,11 @@ REQUIRE_REALNAME_TEXT = (
     "请先发送「@机器人 实名」完成登记（姓名 + 手机号），登记成功后即可正常使用。")
 
 # 受该闸门约束的业务命令（导出走后白名单权限、帮助不拦、绑定/实名本身不拦）
+# ⭐ D44（2026-10-26 用户反馈）：导出也纳入 —— 未实名的人本来就没导出授权，
+# 回「请先实名」比回一句「无导出权限」有用得多。绑定是**群级**动作（与个人
+# 实名无关）且已对全员开放，故不拦。
 GATED_COMMANDS = (commands.CMD_CHECKIN, commands.CMD_SUMMARY,
-                  commands.CMD_REPORT)
+                  commands.CMD_REPORT, commands.CMD_EXPORT)
 
 # ⭐ D34-①B（2026-10-22 用户指令）：被管理员「移出群」的人⛔ 不许被自愈还魂。
 REMOVED_FROM_ROSTER_TEXT = (
@@ -149,15 +152,21 @@ def registered_state(ctx: HandlerContext) -> Optional[bool]:
     False = 名单没有、全局档案也没有姓名（拦截并引导实名）
     None  = 查询异常 —— 调用方⛔ 不得据此拦截（fail-open）
 
-    ⚠️ **名单为空 = 该群还没开始治理**：直接放行且⛔ 不入册
-    （不给未启用名单的群凭空写一堆成员）。
+    ⚠️ **名单为空 = 该群还没开始治理**。
+    ⭐ D44（2026-10-26 用户反馈）改口径：空名单群**也走一次自愈**，不再一律放行。
+    旧口径「空名单直接放行且不入册」的后果是：新群里的人发命令被放行，却
+    **永远进不了名单、后台一条记录都没有**（用户原话：「未执行实名录入到群成员，
+    且后台也没有任何记录」）。现在的语义：
+      - 全局档案有他 -> 无感入册（source=auto_heal）并放行；
+      - 全局档案也没有 -> False，由调用方引导实名。
+    ⛔ 仍然不会「凭空写一堆人」：只有**真的说过话**的人才会被写进来。
     """
     try:
         roster = ctx.state.list_member_tasks(ctx.group_id)
     except Exception:
         return None
     if not roster:
-        return True
+        return _auto_heal_into_roster(ctx)
     if any(row["user_id"] == ctx.phone for row in roster):
         return True
     return _auto_heal_into_roster(ctx)

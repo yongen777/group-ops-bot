@@ -444,7 +444,13 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
                     # 两轮总结优先于未知命令话术（§2.2）
                     reply = summary_handler.handle_pending_text(ctx)
                     if reply is None:
-                        reply = commands.reply_text(parsed)
+                        # ⭐ D44（2026-10-26 用户反馈）：未实名的人发**任何**文本，
+                        # 都得先知道"得先实名" —— 否则他只会看到「未识别该指令」，
+                        # 以为机器人坏了（线上：王红霞发消息只收到帮助文案，
+                        # 后台也没有任何记录）。已实名的人不受影响，照旧只看帮助。
+                        denied = realname_handler.deny_text(ctx)
+                        reply = (denied + "\n\n" + commands.reply_text(parsed)
+                                 if denied else commands.reply_text(parsed))
                 else:
                     reply = commands.reply_text(parsed)
         except Exception:
