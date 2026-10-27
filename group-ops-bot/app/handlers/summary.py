@@ -44,6 +44,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from .. import commands, period as period_mod
@@ -60,6 +61,33 @@ _PERIOD_TO_ARG = {v: k for k, v in _ARG_TO_PERIOD.items()}
 
 NOT_ENABLED_TEXT = "本群未开启总结，请联系管理员"
 EMPTY_CONTENT_TEXT = "总结内容不能为空"
+
+# ⭐ D47（2026-10-26 用户反馈：群里有人发「asdfghjkl」被当成工作总结入库，
+# 后台显示「正常完成」，统计里多出一条假记录）：明显不是总结的内容
+# ⛔ 不落库、⛔ 不消耗会话（用户可直接重发）。
+#
+# ⚠️ 判据刻意**不按长度**：真实总结可以很短（「第一版」「今天完成了X」），
+# 按下限会误伤 —— 首版试过 10 字下限，直接打挂 25 条既有用例。
+# 只拦「一个中文都没有、又不成句」的输入：
+#   - 含中文            -> 放行（多短都放行）
+#   - 无中文但 ≥3 个词   -> 当英文总结放行（"Fixed login bug"）
+#   - 无中文但 ≥20 字符  -> 放行（长英文段落）
+#   - 其余（asdfghjkl / qwer / 12345）-> 拦
+MIN_EN_WORDS = 3
+MIN_EN_CHARS = 20
+MEANINGLESS_CONTENT_TEXT = ("⚠️ 这看起来不是工作总结内容，请发送具体的今日工作内容；"
+                            "如需放弃请回复：取消")
+
+
+def is_meaningless_content(text: str) -> bool:
+    """是否「明显不是总结」的输入（判据见上）。空内容不在此列。"""
+    s = (text or "").strip()
+    if not s:
+        return False
+    if re.search(r"[\u4e00-\u9fff]", s):
+        return False
+    words = [w for w in re.split(r"\s+", s) if w]
+    return len(words) < MIN_EN_WORDS and len(s) < MIN_EN_CHARS
 
 
 def two_round_prompt(ttl_minutes: int) -> str:
@@ -174,6 +202,9 @@ def handle_pending_text(ctx: HandlerContext) -> Optional[str]:
         # ⭐ 2026-10-17 用户指令六：等待输入期间可主动放弃（不占满 TTL）
         ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)
         return SUMMARY_CANCELED_TEXT
+    # ⭐ D47：明显不是总结的内容⛔ 不落库、⛔ 不消耗会话（保留会话让用户重发）
+    if is_meaningless_content(text):
+        return MEANINGLESS_CONTENT_TEXT
     ctx.state.drop_pending_session(ctx.group_id, ctx.phone, BIZ)
     if not text:
         return EMPTY_CONTENT_TEXT

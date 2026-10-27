@@ -1027,13 +1027,37 @@ class StateStore:
             biz_switches=merged, created_at=utcnow_iso())
 
     def group_active(self, group_id: str) -> bool:
-        """群是否处于 active（禁用的群按未绑定处理：回调抑制，§4.7）。"""
+        """群是否可对外提供服务（禁用 = 按未绑定处理：回调抑制，§4.7）。
+
+        ⭐ D47（2026-10-26 用户反馈「停用了群聊为什么还能执行指令」）：
+        后台有两处「停用」—— 群配置 ``group_config.status`` 与机器人实例
+        ``qmx_robot_instance.status``。用户点的是**群实例绑定页**那个，而旧实现
+        只认前者，于是停用后机器人照常响应。现在**一处真相**：两者任一停用
+        即视为不可用，群内任何指令都回停用话术（server 第 4 步）。
+
+        - 无 group_config -> False（未绑定）
+        - 无实例行 -> 不因此判否（历史群 / 未登记实例照旧按配置走）
+        - 实例 DISABLED -> False
+        """
         row = self.get_group_config(group_id)
         if row is None:
             return False
         try:
-            return (row["status"] or "active") == "active"
+            if (row["status"] or "active") != "active":
+                return False
         except (IndexError, KeyError):  # pragma: no cover - 旧库无 status 列
+            pass
+        try:
+            inst = self._conn.execute(
+                "SELECT status FROM qmx_robot_instance WHERE group_id=?",
+                (group_id,)).fetchone()
+        except sqlite3.Error:  # pragma: no cover - 表缺失/锁冲突按可用处理
+            return True
+        if inst is None:
+            return True
+        try:
+            return (inst["status"] or "").upper() != "DISABLED"
+        except (IndexError, KeyError):  # pragma: no cover
             return True
 
     # ---------- 回调发现（P0 群绑定：未绑定群也记账，供后台一键绑定） ----------

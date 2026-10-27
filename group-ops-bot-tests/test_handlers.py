@@ -129,7 +129,7 @@ class TestSummary:
         ctx = ctx_at(tmp_db, backend, AM)
         summary_handler.handle_command(commands.parse("总结"), ctx)
         reply = summary_handler.handle_pending_text(
-            ctx_at(tmp_db, backend, AM, text=" hi"))
+            ctx_at(tmp_db, backend, AM, text=" 今天完成了X"))
         assert "未知" in reply
         tasks = tmp_db.pending_recovery_tasks()
         assert len(tasks) == 1

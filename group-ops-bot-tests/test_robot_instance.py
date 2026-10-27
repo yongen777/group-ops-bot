@@ -25,6 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import commands
+from app.handlers import bind as bind_handler
 from app.config import BotConfig
 from app.state import StateStore
 from app.web.server import create_app
@@ -396,7 +397,14 @@ class TestCallbackAutoDiscoveryAndNaming:
         assert len(events) == 0
 
     def test_three_gates_are_independent(self, tmp_db):
-        """三门纪律：实例 ACTIVE ≠ 群授权；实例 DISABLED ⛔ 不阻断 reply。"""
+        """三门纪律：实例 ACTIVE ≠ 群授权；⭐ D47 起实例 DISABLED 也阻断业务。
+
+        ⚠️ 口径变更（原 docstring：「实例 DISABLED ⛔ 不阻断 reply」）：
+        用户实测「停用了群聊为什么还能执行指令」——后台「群实例绑定」页的
+        停用只停推送出站，业务照跑，与用户预期完全相反。现在实例停用 =
+        群内任何指令都回停用话术（与 `group_config.status=disabled` 同效，
+        一处真源在 `state.group_active`）。
+        """
         tmp_db.ensure_robot_instance(INST_GROUP)
         tmp_db.bind_robot_instance(INST_GROUP, "https://bot.example.com/hook")
         client, sender = _callback_app(tmp_db)
@@ -404,7 +412,7 @@ class TestCallbackAutoDiscoveryAndNaming:
         resp = _post_callback(client, INST_GROUP, "打卡")
         assert resp.json()["replied"] is True
         assert "本群尚未接入机器人" in sender.sent[-1]["text"]
-        # 群授权 + 业务开 + 实例 DISABLED -> 业务照常处理、回推照常
+        # 群授权 + 业务开 + 实例 DISABLED -> ⭐ D47：不执行业务，回停用话术
         tmp_db.create_group(INST_GROUP, "授权群")
         tmp_db.upsert_group_config(
             INST_GROUP,
@@ -412,7 +420,14 @@ class TestCallbackAutoDiscoveryAndNaming:
         tmp_db.set_robot_instance_status(INST_GROUP, "DISABLED")
         resp = _post_callback(client, INST_GROUP, "帮助")
         assert resp.status_code == 200
-        assert resp.json()["replied"] is True  # 未知命令帮助文案照回
+        assert resp.json()["replied"] is True
+        assert sender.sent[-1]["text"] == bind_handler.DISABLED_GROUP_TEXT
+        # 业务命令同样被拦（⛔ 不能只拦帮助文案）
+        _post_callback(client, INST_GROUP, "打卡")
+        assert sender.sent[-1]["text"] == bind_handler.DISABLED_GROUP_TEXT
+        # 恢复实例 -> 业务照常（证明可逆，⛔ 不是永久锁死）
+        tmp_db.set_robot_instance_status(INST_GROUP, "ACTIVE")
+        _post_callback(client, INST_GROUP, "帮助")
         assert sender.sent[-1]["text"] == commands.HELP_TEXT
 
 
