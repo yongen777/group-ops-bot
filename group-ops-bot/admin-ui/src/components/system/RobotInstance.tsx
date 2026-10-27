@@ -708,7 +708,7 @@ export const RobotInstance: React.FC = () => {
       <div className="flex items-center gap-1.5 text-[11px] text-slate-400 px-1">
         <HelpCircle className="w-3.5 h-3.5" />
         <span>
-          停用只影响机器人向该群的提醒推送，不影响群内业务命令的响应；移除群聊则会清空该群的全部配置。
+          停用后该群将无法执行任何指令（打卡 / 总结 / 报数 / 导出），也不再接收提醒推送；移除群聊则会清空该群的全部配置。
         </span>
       </div>
     </div>

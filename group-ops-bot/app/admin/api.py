@@ -1542,8 +1542,13 @@ def create_admin_router(*, state: StateStore, backend: Backend,
 
     @router.post("/robot-instances/{group_id}/disable")
     def disable_robot_instance(group_id: str, request: Request = None):
-        """T3 禁用（任意状态，幂等）。⚠️ 只影响将来 push/file 出站能否使用
-        已登记 webhook；⛔ 不阻断 reply 回推、⛔ 不改变群业务授权。"""
+        """T3 禁用（任意状态，幂等）。
+
+        ⭐ D47（2026-10-27）口径变更：原来只停 push/file 出站，reply 回推与
+        群业务授权照旧 —— 用户实测「停用了群聊为什么还能执行指令」，完全
+        反直觉。现在 `state.group_active` 是唯一真源：实例 DISABLED 即视为
+        该群不可用，群内任何指令（含帮助文案）都回 `DISABLED_GROUP_TEXT`。
+        """
         identity = _identity(request, state)
         _require_password_changed(identity)
         _require_csrf(request, identity)
