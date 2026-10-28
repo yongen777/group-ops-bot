@@ -344,6 +344,10 @@ PENDING_SESSION_TTL_MINUTES = 30  # §2.2：TTL 30 分钟
 # 提醒冷却（用户指令第五阶段）：同群同业务同周期同人（同时段）
 # 距上次提醒不足 5 分钟 -> ⛔ 不重复打扰；冷却已过可再提醒
 REMINDER_COOLDOWN_MINUTES = 5
+
+# ⭐ D48（2026-10-28 用户反馈）：手动提醒刚发过时，自动调度⛔ 不再「接管补发」。
+# 隔多久才算「不是刚刚」见 record_reminder_plan。
+MANUAL_TAKEOVER_MIN_MINUTES = 30
 # 管理后台登录限流（§4.7）：同 用户名+IP 失败达上限即锁 LOGIN_LOCK_SECONDS
 LOGIN_MAX_FAILURES = 5
 LOGIN_LOCK_SECONDS = 15 * 60
@@ -1780,8 +1784,24 @@ class StateStore:
                  if len(phone) >= 7 else "***"), session)
             return True
         row_source = (row["source"] if "source" in row.keys() else "auto") or "auto"
+        # ⭐ D48（2026-10-28 用户反馈）：手动提醒**刚发过**时，自动调度⛔ 不再补发。
+        # 原逻辑只看 source，于是「17:39:08 手动点总结 → 17:39:30 定时窗口到」
+        # 会让同一条内容在群里连发两遍（用户实测总结、报数各收两条）。
+        # 现在要求手动那行已过去 ≥ MANUAL_TAKEOVER_MIN_MINUTES 才接管：
+        #   - 跨时段（上午手动催、下午定时到）不受影响，D26 事故修复仍成立
+        #   - 同窗口内手动点完，自动不再重复轰炸
+        manual_recent = False
+        if row_source == "manual" and row["status"] == "sent":
+            sent_raw = row["sent_at"] or row["created_at"]
+            try:
+                sent_dt = _ensure_aware(datetime.fromisoformat(sent_raw))
+                manual_recent = (now - sent_dt) < timedelta(
+                    minutes=MANUAL_TAKEOVER_MIN_MINUTES)
+            except (TypeError, ValueError):  # pragma: no cover - 脏数据不拦
+                manual_recent = False
         takeover = (source == "auto" and row["status"] == "sent"
-                    and row_source == "manual" and not resend_sent)
+                    and row_source == "manual" and not resend_sent
+                    and not manual_recent)
         if row["status"] == "sent" and not resend_sent and not takeover:
             return False   # ⛔ 自动调度：本期已自动送达 = 不再打扰
         if not takeover:
