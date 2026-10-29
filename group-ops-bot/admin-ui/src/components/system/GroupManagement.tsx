@@ -1187,7 +1187,7 @@ export const GroupManagement: React.FC = () => {
                         每日下发提醒时间 <span className="text-rose-500 font-bold">*必设项</span>
                       </label>
                       <span className="text-[10px] text-amber-800 font-semibold bg-amber-100/80 px-1.5 py-0.2 rounded border border-amber-300">
-                        全天执行周期
+                        {daysHint(reminder.summaryDays)}
                       </span>
                     </div>
                     <input
@@ -1199,9 +1199,9 @@ export const GroupManagement: React.FC = () => {
                   </div>
 
                   <div className="p-2.5 rounded-lg bg-amber-50/70 border border-amber-200/80 text-[11px] text-amber-900">
-                    <span className="font-bold block">全天周期提醒机制：</span>
+                    <span className="font-bold block">执行日与下发时间：</span>
                     <p className="text-amber-800 leading-relaxed">
-                      工作总结固定为每天一整天为执行时间，因此必须由管理员设置每日具体的下发提醒时间点。
+                      仅在勾选的执行日下发提醒；非执行日不提醒，也不接受成员提交总结。
                     </p>
                   </div>
                 </div>
@@ -1242,7 +1242,7 @@ export const GroupManagement: React.FC = () => {
                         每日下发提醒时间 <span className="text-rose-500 font-bold">*必设项</span>
                       </label>
                       <span className="text-[10px] text-emerald-800 font-semibold bg-emerald-100/80 px-1.5 py-0.2 rounded border border-emerald-300">
-                        全天执行周期
+                        {daysHint(reminder.reportDays)}
                       </span>
                     </div>
                     <input
@@ -1254,9 +1254,9 @@ export const GroupManagement: React.FC = () => {
                   </div>
 
                   <div className="p-2.5 rounded-lg bg-emerald-50/70 border border-emerald-200/80 text-[11px] text-emerald-900">
-                    <span className="font-bold block">全天周期提醒机制：</span>
+                    <span className="font-bold block">执行日与下发时间：</span>
                     <p className="text-emerald-800 leading-relaxed">
-                      今日报数固定为每天一整天为执行时间，因此必须由管理员设置每日具体的下发提醒时间点。
+                      仅在勾选的执行日下发提醒；非执行日不提醒，也不接受成员报数。
                     </p>
                   </div>
                 </div>
