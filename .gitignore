@@ -30,3 +30,6 @@ data/
 # 虚拟环境
 .venv/
 venv/
+
+# vite 构建临时文件（每次 build 生成，⛔ 不入库）
+group-ops-bot/admin-ui/vite.config.ts.timestamp-*.mjs
