@@ -45,7 +45,8 @@ from typing import Optional
 from .. import period as period_mod
 from .. import tokens as tokens_mod
 from .base import (KIND_A, KIND_B, KIND_C, HandlerContext, SubmitResult,
-                   ALREADY_DONE_TEXT, biz_enabled, ensure_user_id,
+                   ALREADY_DONE_TEXT, biz_days, biz_enabled,
+                   biz_scheduled_today, days_text, ensure_user_id,
                    run_submission, scope_key, token_record_from_row)
 from ..tokens import RejectReason
 
@@ -54,6 +55,13 @@ LOG = logging.getLogger(__name__)
 BIZ = "report"
 
 NOT_ENABLED_TEXT = "本群未开启报数，请联系管理员"
+
+# ⭐ D49（2026-10-29 用户指令）：每个业务可单独配置执行日（周几）。
+# 非执行日发命令 -> 明确告知今天不用做，⛔ 不进业务、⛔ 不挂会话。
+def not_scheduled_text(ctx) -> str:
+    return ("今天不是本群{label}日（{label}日：{days}），无需{action}；"
+            "如需调整请联系后台管理员。").format(
+                label="报数", action="报数", days=days_text(biz_days(ctx, BIZ)))
 # 报数链接话术（⭐ 2026-10-19 用户指令：与打卡同口径，带有效期提醒）。
 # ⚠️ 有效期数字单一真源 = tokens.TOKEN_TTL_MINUTES，⛔ 不另写死 30。
 LINK_TEXT = ("请点击链接填写今日报数：{url}\n"
@@ -98,6 +106,8 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
     """「报数」入口命令：签发 H5 令牌。"""
     if not biz_enabled(ctx, BIZ):
         return NOT_ENABLED_TEXT
+    if not biz_scheduled_today(ctx, BIZ):
+        return not_scheduled_text(ctx)
     period_k = period_mod.daily_key(ctx.now)
     scope = scope_key(ctx.group_id, ctx.phone, BIZ, period_k)
     if ctx.state.has_successful_scope(scope):

@@ -49,8 +49,9 @@ from typing import Optional
 
 from .. import commands, period as period_mod
 from .base import (KIND_A, KIND_B, KIND_C, BOT_MENTION_NAME, HandlerContext,
-                   SubmitResult, biz_enabled, ensure_user_id,
-                   group_period_type, run_submission, scope_key)
+                   SubmitResult, biz_days, biz_enabled, biz_scheduled_today,
+                   days_text, ensure_user_id, group_period_type,
+                   run_submission, scope_key)
 
 LOG = logging.getLogger("group-ops.summary")
 
@@ -60,6 +61,13 @@ _ARG_TO_PERIOD = {"日报": period_mod.PERIOD_DAILY, "周报": period_mod.PERIOD
 _PERIOD_TO_ARG = {v: k for k, v in _ARG_TO_PERIOD.items()}
 
 NOT_ENABLED_TEXT = "本群未开启总结，请联系管理员"
+
+# ⭐ D49（2026-10-29 用户指令）：每个业务可单独配置执行日（周几）。
+# 非执行日发命令 -> 明确告知今天不用做，⛔ 不进业务、⛔ 不挂会话。
+def not_scheduled_text(ctx) -> str:
+    return ("今天不是本群{label}日（{label}日：{days}），无需{action}；"
+            "如需调整请联系后台管理员。").format(
+                label="总结", action="提交总结", days=days_text(biz_days(ctx, BIZ)))
 EMPTY_CONTENT_TEXT = "总结内容不能为空"
 
 # ⭐ D47（2026-10-26 用户反馈：群里有人发「asdfghjkl」被当成工作总结入库，
@@ -161,6 +169,8 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
     """
     if not biz_enabled(ctx, BIZ):
         return NOT_ENABLED_TEXT
+    if not biz_scheduled_today(ctx, BIZ):
+        return not_scheduled_text(ctx)
     ctx.state.put_pending_session(ctx.group_id, ctx.phone, BIZ, None,
                                   ctx.now,
                                   ttl_minutes=ctx.config.pending_ttl_minutes)

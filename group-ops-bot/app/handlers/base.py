@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -129,6 +130,89 @@ def biz_enabled(ctx: HandlerContext, biz: str) -> bool:
     except ValueError:
         return False
     return bool(switches.get(biz))
+
+
+# ⭐ D49（2026-10-29 用户指令）：每个业务**单独**配置执行日（周几）。
+# ISO 编号：1=周一 … 7=周日；默认全周（与改动前行为完全一致）。
+ALL_WEEKDAYS = (1, 2, 3, 4, 5, 6, 7)
+WEEKDAYS_ONLY = (1, 2, 3, 4, 5)
+WEEKEND_ONLY = (6, 7)
+WEEKDAY_LABELS = {1: "周一", 2: "周二", 3: "周三", 4: "周四",
+                  5: "周五", 6: "周六", 7: "周日"}
+
+
+def normalize_days(value) -> tuple:
+    """配置值 -> 合法工作日元组（去重升序）。
+
+    ⛔ 空列表 / 全非法 -> 全周：宁可多催一天，也不能因为配置失误让业务彻底失联。
+    """
+    if not isinstance(value, (list, tuple)):
+        return ALL_WEEKDAYS
+    clean = set()
+    for item in value:
+        try:
+            day = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= day <= 7:
+            clean.add(day)
+    return tuple(sorted(clean)) or ALL_WEEKDAYS
+
+
+def biz_days_of_row(group_row, biz: str) -> tuple:
+    """从群配置行解析某业务的执行日（缺配置 = 全周）。"""
+    if group_row is None:
+        return ALL_WEEKDAYS
+    try:
+        raw = group_row["reminder_rules"]
+    except (IndexError, KeyError):  # pragma: no cover - 旧库无该列
+        return ALL_WEEKDAYS
+    try:
+        rules = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        return ALL_WEEKDAYS
+    if not isinstance(rules, dict):
+        return ALL_WEEKDAYS
+    rule = rules.get(biz)
+    if not isinstance(rule, dict):
+        return ALL_WEEKDAYS
+    return normalize_days(rule.get("days"))
+
+
+def biz_days(ctx: HandlerContext, biz: str) -> tuple:
+    """某业务的执行日（读本群配置）。"""
+    try:
+        row = ctx.state.get_group_config(ctx.group_id)
+    except Exception:  # pragma: no cover - 查询异常 fail-open
+        return ALL_WEEKDAYS
+    return biz_days_of_row(row, biz)
+
+
+def biz_scheduled_on(group_row, biz: str, day: int) -> bool:
+    """指定 ISO 星期是否在该业务的执行日。"""
+    return int(day) in biz_days_of_row(group_row, biz)
+
+
+def biz_scheduled_today(ctx: HandlerContext, biz: str) -> bool:
+    """今天是否该业务的执行日（业务入口用来决定放不放行）。"""
+    try:
+        day = ctx.now.isoweekday()
+    except Exception:  # pragma: no cover - 时钟异常不拦人
+        return True
+    return biz_scheduled_on(
+        ctx.state.get_group_config(ctx.group_id), biz, day)
+
+
+def days_text(days) -> str:
+    """执行日的中文描述（回执用）：全周 -> 每天；工作日 / 周末 -> 短语。"""
+    clean = tuple(days)
+    if clean == ALL_WEEKDAYS:
+        return "每天"
+    if clean == WEEKDAYS_ONLY:
+        return "周一至周五"
+    if clean == WEEKEND_ONLY:
+        return "周六、周日"
+    return "、".join(WEEKDAY_LABELS.get(d, str(d)) for d in clean)
 
 
 def group_period_type(ctx: HandlerContext) -> str:

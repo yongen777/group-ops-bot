@@ -176,6 +176,63 @@ export const GroupManagement: React.FC = () => {
     loadAll();
   }, [loadAll]);
 
+  // ⭐ D49（2026-10-29 用户指令）：每个业务可单独配置执行日（周几）。
+  // ISO 编号 1=周一 … 7=周日；默认全周 = 改动前行为。
+  const ALL_DAYS = [1, 2, 3, 4, 5, 6, 7];
+  const DAY_LABELS: Record<number, string> = {
+    1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六', 7: '日',
+  };
+
+  function normalizeDaysInput(raw?: number[]): number[] {
+    const clean = (raw || []).filter((d) => d >= 1 && d <= 7);
+    return clean.length
+      ? Array.from(new Set(clean)).sort((a, b) => a - b)
+      : [...ALL_DAYS];
+  }
+
+  function daysHint(days: number[]): string {
+    if (days.length === 7) return '每天';
+    if (days.length === 5 && !days.includes(6) && !days.includes(7)) return '工作日';
+    if (days.length === 2 && days.includes(6) && days.includes(7)) return '仅周末';
+    return days.map((d) => '周' + DAY_LABELS[d]).join('、');
+  }
+
+  function DayPicker({
+    value,
+    onChange,
+  }: {
+    value: number[];
+    onChange: (v: number[]) => void;
+  }) {
+    const toggle = (day: number) => {
+      const next = value.includes(day)
+        ? value.filter((d) => d !== day)
+        : [...value, day].sort((a, b) => a - b);
+      if (!next.length) return;   // ⛔ 至少保留一天
+      onChange(next);
+    };
+    return (
+      <div className="flex items-center gap-1 flex-wrap">
+        {ALL_DAYS.map((day) => (
+          <button
+            key={day}
+            type="button"
+            onClick={() => toggle(day)}
+            title={`周${DAY_LABELS[day]}`}
+            className={`w-7 h-7 rounded-lg text-[11px] font-bold border transition ${
+              value.includes(day)
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white text-slate-400 border-slate-200 hover:border-blue-300'
+            }`}
+          >
+            {DAY_LABELS[day]}
+          </button>
+        ))}
+        <span className="text-[10px] text-slate-500 ml-1">{daysHint(value)}</span>
+      </div>
+    );
+  }
+
   // ===================== 群配置 =====================
   const [groupNameInput, setGroupNameInput] = useState('');
   const [nameDirty, setNameDirty] = useState(false);
@@ -186,6 +243,9 @@ export const GroupManagement: React.FC = () => {
     report: true,
     summaryTime: '18:00',
     reportTime: '18:30',
+    checkinDays: [1, 2, 3, 4, 5, 6, 7],
+    summaryDays: [1, 2, 3, 4, 5, 6, 7],
+    reportDays: [1, 2, 3, 4, 5, 6, 7],
   });
 
   useEffect(() => {
@@ -199,6 +259,9 @@ export const GroupManagement: React.FC = () => {
       report: config.reminder_rules?.report?.enabled ?? true,
       summaryTime: config.reminder_rules?.summary?.times?.[0] || '18:00',
       reportTime: config.reminder_rules?.report?.times?.[0] || '18:30',
+      checkinDays: normalizeDaysInput(config.reminder_rules?.checkin?.days),
+      summaryDays: normalizeDaysInput(config.reminder_rules?.summary?.days),
+      reportDays: normalizeDaysInput(config.reminder_rules?.report?.days),
     });
   }, [config]);
 
@@ -290,9 +353,21 @@ export const GroupManagement: React.FC = () => {
       .slice(0, 5);
     const patch = {
       reminder_rules: {
-        checkin: { enabled: reminder.checkin, times: checkinTimes.length ? checkinTimes : ['09:00'] },
-        summary: { enabled: reminder.summary, times: [reminder.summaryTime] },
-        report: { enabled: reminder.report, times: [reminder.reportTime] },
+        checkin: {
+          enabled: reminder.checkin,
+          times: checkinTimes.length ? checkinTimes : ['09:00'],
+          days: reminder.checkinDays,
+        },
+        summary: {
+          enabled: reminder.summary,
+          times: [reminder.summaryTime],
+          days: reminder.summaryDays,
+        },
+        report: {
+          enabled: reminder.report,
+          times: [reminder.reportTime],
+          days: reminder.reportDays,
+        },
       },
     };
     await saveConfig(patch, '结构化定时提醒调度规则已保存生效');
@@ -1034,6 +1109,16 @@ export const GroupManagement: React.FC = () => {
                     />
                   </div>
 
+                  <div className="p-2.5 rounded-lg border border-slate-200 bg-white">
+                    <div className="text-[10px] text-slate-500 font-semibold mb-1.5">
+                      执行日（仅这些天会提醒，也仅这些天能执行打卡）
+                    </div>
+                    <DayPicker
+                      value={reminder.checkinDays}
+                      onChange={(v) => setReminder({ ...reminder, checkinDays: v })}
+                    />
+                  </div>
+
                   <div className="p-3 rounded-xl bg-blue-50/80 border border-blue-200 text-xs text-blue-950 space-y-2">
                     <div className="font-bold flex items-center gap-1.5 text-blue-900">
                       <Clock className="w-3.5 h-3.5 text-blue-600" />
@@ -1086,6 +1171,16 @@ export const GroupManagement: React.FC = () => {
                     />
                   </div>
 
+                  <div className="p-2.5 rounded-lg border border-slate-200 bg-white">
+                    <div className="text-[10px] text-slate-500 font-semibold mb-1.5">
+                      执行日（仅这些天会提醒，也仅这些天能执行总结）
+                    </div>
+                    <DayPicker
+                      value={reminder.summaryDays}
+                      onChange={(v) => setReminder({ ...reminder, summaryDays: v })}
+                    />
+                  </div>
+
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-slate-700 text-xs font-bold">
@@ -1128,6 +1223,16 @@ export const GroupManagement: React.FC = () => {
                       checked={reminder.report}
                       onChange={(e) => setReminder({ ...reminder, report: e.target.checked })}
                       className="w-4 h-4 rounded accent-blue-600 cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="p-2.5 rounded-lg border border-slate-200 bg-white">
+                    <div className="text-[10px] text-slate-500 font-semibold mb-1.5">
+                      执行日（仅这些天会提醒，也仅这些天能执行报数）
+                    </div>
+                    <DayPicker
+                      value={reminder.reportDays}
+                      onChange={(v) => setReminder({ ...reminder, reportDays: v })}
                     />
                   </div>
 

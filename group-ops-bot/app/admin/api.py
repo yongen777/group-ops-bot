@@ -251,6 +251,7 @@ def _validate_reminder_rules(payload, current_raw=None) -> dict:
     打卡行只送 enabled，若整列替换会把总结 / 报数规则清掉）。
     """
     from ..handlers import reminder as reminder_handler
+    from ..handlers.base import ALL_WEEKDAYS
     merged = reminder_handler.normalize_reminder_rules(current_raw)
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="提醒规则格式不正确，请刷新页面重试")
@@ -289,6 +290,34 @@ def _validate_reminder_rules(payload, current_raw=None) -> dict:
                 status_code=400,
                 detail="%s 的提醒文本不能超过 200 字符" % biz)
         rule["text"] = text.strip()
+        # ⭐ D49（2026-10-29 用户指令）：执行日（ISO 1=周一 … 7=周日）。
+        # 未提供 -> 保留原值（与 enabled/times/text 同一套「部分更新」语义）。
+        days_raw = value.get("days")
+        if days_raw is None:
+            days = result[biz].get("days") or list(ALL_WEEKDAYS)
+        else:
+            if not isinstance(days_raw, list):
+                raise HTTPException(
+                    status_code=400,
+                    detail="%s 的执行日格式不正确" % biz)
+            picked = []
+            for item in days_raw:
+                try:
+                    day = int(item)
+                except (TypeError, ValueError):
+                    day = 0
+                if not 1 <= day <= 7:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="%s 的执行日只能是 1~7（1=周一，7=周日）" % biz)
+                if day not in picked:
+                    picked.append(day)
+            if not picked:
+                raise HTTPException(
+                    status_code=400,
+                    detail="%s 至少要选择一天执行日" % biz)
+            days = sorted(picked)
+        rule["days"] = list(days)
         result[biz] = rule
     if not any(biz in payload for biz in ("checkin", "summary", "report")):
         raise HTTPException(status_code=400, detail="没有需要更新的提醒规则")

@@ -41,7 +41,8 @@ from typing import Optional
 from .. import period as period_mod
 from .. import tokens as tokens_mod
 from .base import (KIND_A, KIND_B, KIND_C, HandlerContext, SubmitResult,
-                   ALREADY_DONE_TEXT, biz_enabled, ensure_user_id,
+                   ALREADY_DONE_TEXT, biz_days, biz_enabled,
+                   biz_scheduled_today, days_text, ensure_user_id,
                    run_submission, scope_key, token_record_from_row)
 from ..tokens import RejectReason, TokenState
 
@@ -126,6 +127,13 @@ def slot_remind_at(slot: dict) -> str:
     return default_remind_at(slot.get("start"), slot.get("end"))
 
 NOT_ENABLED_TEXT = "本群未开启打卡，请联系管理员"
+
+# ⭐ D49（2026-10-29 用户指令）：每个业务可单独配置执行日（周几）。
+# 非执行日发命令 -> 明确告知今天不用做，⛔ 不进业务、⛔ 不挂会话。
+def not_scheduled_text(ctx) -> str:
+    return ("今天不是本群{label}日（{label}日：{days}），无需{action}；"
+            "如需调整请联系后台管理员。").format(
+                label="打卡", action="打卡", days=days_text(biz_days(ctx, BIZ)))
 # 链接话术（用户指令 2026-10-16 二：带有效期提醒）。
 # ⚠️ 有效期口径单一真源 = tokens.TOKEN_TTL_MINUTES（30 分钟硬上限，
 # ⛔ 不在这里另写一个数字，否则两处必然漂移）。
@@ -383,6 +391,8 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
     """「打卡」入口命令：需图 -> 签发 H5 令牌；免图 -> 直接提交。"""
     if not biz_enabled(ctx, BIZ):
         return NOT_ENABLED_TEXT
+    if not biz_scheduled_today(ctx, BIZ):
+        return not_scheduled_text(ctx)
     slots = configured_slots(ctx)
     slot, next_slot = resolve_slot(slots, ctx.now)
     if slot is None:

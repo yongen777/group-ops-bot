@@ -11,6 +11,8 @@ export interface ReminderRule {
   enabled: boolean;
   times: string[];
   text: string;
+  /** ⭐ D49：执行日（ISO 1=周一 … 7=周日）。缺省/空 = 每天。 */
+  days?: number[];
 }
 
 export interface GroupConfig {

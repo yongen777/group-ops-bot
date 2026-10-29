@@ -73,9 +73,11 @@ class TestRulesParsing:
                        "text": "今晚交数"},
         })
         rules = rules_of(tmp_db)
+        # ⭐ D49：规则结构多一个 days（执行日，默认全周）
         assert rules["checkin"] == {"enabled": True,
                                     "times": ["09:00", "14:50"],
-                                    "text": "记得打卡"}
+                                    "text": "记得打卡",
+                                    "days": [1, 2, 3, 4, 5, 6, 7]}
         assert rules["summary"]["enabled"] is False
         assert rules["report"]["times"] == ["20:00"]
 
@@ -93,9 +95,11 @@ class TestRulesParsing:
         """未配置 -> 产品默认（checkin 09:00/14:50；summary/report 19:00）。"""
         assert rules_of(tmp_db) == {
             "checkin": {"enabled": True, "times": ["09:00", "14:50"],
-                        "text": ""},
-            "summary": {"enabled": True, "times": ["19:00"], "text": ""},
-            "report": {"enabled": True, "times": ["19:00"], "text": ""},
+                        "text": "", "days": [1, 2, 3, 4, 5, 6, 7]},
+            "summary": {"enabled": True, "times": ["19:00"], "text": "",
+                        "days": [1, 2, 3, 4, 5, 6, 7]},
+            "report": {"enabled": True, "times": ["19:00"], "text": "",
+                       "days": [1, 2, 3, 4, 5, 6, 7]},
         }
 
     def test_bad_values_fall_back_per_biz(self, tmp_db):

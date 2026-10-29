@@ -56,7 +56,8 @@ from typing import Optional
 from .. import period as period_mod
 from ..backend.base import Backend, BackendError
 from ..state import StateStore
-from .base import BOT_MENTION_NAME
+from .base import (ALL_WEEKDAYS, BOT_MENTION_NAME, biz_scheduled_on,
+                   normalize_days)
 
 BIZ = "reminder"
 LOG = logging.getLogger("group-ops.reminder")
@@ -202,9 +203,12 @@ def _in_slot(start: int, end: int, now_min: int) -> bool:
 
 
 def _default_rule(biz: str) -> dict:
+    # ⭐ D49（2026-10-29 用户指令）：每个业务可单独配置执行日（周几）。
+    # 默认全周 —— 与改动前行为完全一致，⛔ 不做隐式行为变更。
     return {"enabled": True,
             "times": list(DEFAULT_REMINDER_RULES.get(biz, [])),
-            "text": ""}
+            "text": "",
+            "days": list(ALL_WEEKDAYS)}
 
 
 def normalize_reminder_rules(raw) -> dict:
@@ -236,6 +240,9 @@ def normalize_reminder_rules(raw) -> dict:
             clean = [str(x) for x in times if isinstance(x, str)]
             if clean:
                 result[biz]["times"] = clean[:MAX_REMINDER_TIMES]
+        if "days" in value:
+            # ⭐ D49：执行日（ISO 1=周一 … 7=周日）。空 / 全非法 -> 全周。
+            result[biz]["days"] = list(normalize_days(value.get("days")))
         text = value.get("text")
         if isinstance(text, str):
             result[biz]["text"] = text.strip()[:MAX_REMINDER_TEXT]
@@ -447,6 +454,11 @@ def run_group(state: StateStore, backend: Backend, push, group_row,
         # ⛔ 只对开启中的业务发提醒（用户指令第五阶段 + 验收项 4：
         #    群业务开关 + 该业务自己的提醒开关，两道门）
         if not switches.get(one):
+            continue
+        # ⭐ D49：今天不是该业务的执行日 -> 整个业务跳过（⛔ 不发提醒、
+        # ⛔ 不计入 targets，避免后台看到「判定了却没发」的假异常）。
+        if not biz_scheduled_on(group_row, one, now.isoweekday()):
+            summary.setdefault("skipped_days", []).append(one)
             continue
         rule = _rules_for(group_row, one)
         if not rule["enabled"]:
