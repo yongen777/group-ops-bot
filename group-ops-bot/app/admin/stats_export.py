@@ -20,6 +20,10 @@ from openpyxl.styles import Font, PatternFill
 
 from ..backend.base import Backend
 from ..state import StateStore
+# ⭐ D50（2026-10-29）：导出侧要判「该周期是否落在执行日」。判定逻辑只有一份
+# （`handlers.stats.period_scheduled`），这里 re-export 给 admin 层用，
+# ⛔ 不复制实现（否则两处判定迟早漂移）。
+from ..handlers.stats import period_scheduled  # noqa: F401
 
 BIZ_LABEL = {"checkin": "打卡", "summary": "总结", "report": "报数"}
 STATUS_LABEL = {"NORMAL": "按时", "LATE": "迟到", "ADMIN_EDIT": "后台补录"}

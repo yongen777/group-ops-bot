@@ -98,14 +98,21 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
     summary_ptype = group_period_type(ctx)
     records = {}
     periods = {}
+    skipped = []
     for biz in commands.EXPORT_ALL_BIZS:
         period_k = _period_for(biz, summary_ptype, ctx.now)
+        # ⭐ D50：非执行日⛔ 不生成表（否则是「全员未提交」的浅红表）
+        if not period_scheduled(ctx.state, ctx.group_id, biz, period_k):
+            skipped.append(biz)
+            continue
         try:
             records[biz] = _query_records(ctx, biz, period_k)
         except Exception:
             # 查询类失败：⛔ 不猜数据、不生成空表冒充成功
             return QUERY_FAILED_TEXT
         periods[biz] = period_k
+    if not records:
+        return EXPORT_OFF_DAY_TEXT
 
     out_dir = Path(ctx.config.data_dir) / "exports"
     # 三个文件共用同一个时间戳，便于成组识别
@@ -137,11 +144,15 @@ def handle_command(parsed, ctx: HandlerContext) -> str:
             else:
                 failed += 1
 
+    note = ""
+    if skipped:
+        note = "\n（今天不是%s的执行日，未导出）" % "、".join(
+            _BIZ_LABELS[b] for b in skipped)
     if failed == 0:
-        return EXPORT_SENT_TEXT
+        return EXPORT_SENT_TEXT + note
     if sent == 0:
         return EXPORT_SEND_FAILED_TEXT
-    return EXPORT_PARTIAL_TEXT % (sent, failed)
+    return EXPORT_PARTIAL_TEXT % (sent, failed) + note
 
 
 def is_broadcast_receipt(text: str) -> bool:
@@ -150,7 +161,8 @@ def is_broadcast_receipt(text: str) -> bool:
     导出成功的回执只 @所有人，⛔ 不再额外 @ 提问者 —— 那条消息是发给大家
     看的，不是回复某个人。失败类回执仍要 @ 提问者（他得知道没发出去）。
     """
-    return (text or "").strip() == EXPORT_SENT_TEXT
+    # ⭐ D50：成功回执可能追加「未导出」说明，改用前缀判定
+    return (text or "").strip().startswith(EXPORT_SENT_TEXT)
 
 
 def _roster(ctx: HandlerContext) -> list:
@@ -198,6 +210,45 @@ def _try_send_file(sender, group_id: str, path: Path) -> bool:
     LOG.warning("export file send failed: group=%s name=%s path=%s "
                 "reason=%s", group_id, path.name, path, reason)
     return False
+
+
+# ⭐ D50（2026-10-29 用户口径：「没业务就没有应交」）：非执行日⛔ 不产出
+# 「全员未提交」的浅红表 —— 那天本来就没有这项业务。
+EXPORT_OFF_DAY_TEXT = ("今天不是本群任何业务的执行日"
+                       "（执行日可在后台群配置里调整），无可导出数据。")
+_BIZ_LABELS = {"checkin": "打卡", "summary": "总结", "report": "报数"}
+
+
+def period_scheduled(state, group_id: str, biz: str, period_key: str) -> bool:
+    """该导出周期里是否至少有一天是执行日。
+
+    - daily（打卡 / 报数 / 日报）-> 就看那一天
+    - weekly（周报）-> 周一到周日任一天在执行日即算（周末导周报不应被拦）
+    读取失败一律按「执行」处理（fail-open，⛔ 不能因为读不到配置就挡导出）。
+    """
+    from ..handlers.base import biz_days_of_row
+    from datetime import date as _date
+    try:
+        row = state.get_group_config(group_id)
+        days = set(biz_days_of_row(row, biz))
+    except Exception:
+        return True
+    if not days:
+        return True
+    key = (period_key or "").strip()
+    if "-W" in key:
+        try:
+            year, week = key.split("-W", 1)
+            monday = _date.fromisocalendar(int(year), int(week), 1)
+        except (TypeError, ValueError):
+            return True
+        from datetime import timedelta as _td
+        return any((monday + _td(days=i)).isoweekday() in days
+                   for i in range(7))
+    try:
+        return period_mod.parse_daily_key(key).isoweekday() in days
+    except (TypeError, ValueError):
+        return True
 
 
 def _period_for(biz: str, summary_ptype, now) -> str:

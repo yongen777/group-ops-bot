@@ -47,7 +47,22 @@ _DEFAULT_SLOTS = [{"id": "am", "name": "上午", "start": "00:00",
 
 STATUS_TEXT = {"completed": "正常完成", "backfilled": "已补录",
                "overdue": "逾期（待补录）", "pending": "未完成",
-               "reminded": "未完成（已提醒）", "waiting": "未完成"}
+               "reminded": "未完成（已提醒）", "waiting": "未完成",
+               # ⭐ D50（2026-10-29 用户口径：「没业务就没有应交」）
+               "off": "休息"}
+
+
+def _scheduled_on(row, biz: str, date_str: str, period_type: str) -> bool:
+    """该业务在 date_str 这天是否执行（周报看整周是否有一天在执行日）。"""
+    from ..handlers.base import biz_days_of_row
+    from ..period import parse_daily_key
+    days = set(biz_days_of_row(row, biz))
+    day = parse_daily_key(date_str)
+    if biz == "summary" and period_type == "weekly":
+        from datetime import timedelta as _td
+        monday = day - _td(days=day.isoweekday() - 1)
+        return any((monday + _td(days=i)).isoweekday() in days for i in range(7))
+    return day.isoweekday() in days
 
 _QUERIES = {"checkin": "checkin_query_records",
             "summary": "summary_query_records",
@@ -255,6 +270,14 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
     period_keys = {"checkin": date_str, "report": date_str,
                    "summary": _period_key(period_type, _dt)}
 
+    # ⭐ D50（2026-10-29）：非执行日 = 该业务当天不存在。
+    # 不提醒、不能提交，看板/导出也⛔ 不能把它算成「未完成」。
+    scheduled = {
+        "checkin": _scheduled_on(row, "checkin", date_str, period_type),
+        "summary": _scheduled_on(row, "summary", date_str, period_type),
+        "report": _scheduled_on(row, "report", date_str, period_type),
+    }
+
     # ---- 三业务取数（单业务失败只标 unknown，不拖垮整张表） ----
     unknown = {"checkin": False, "summary": False, "report": False}
     records: dict = {}
@@ -344,6 +367,12 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
         }
         slot_done = slot_seen = 0
         for slot in slots:
+            if not scheduled["checkin"]:
+                member["checkin"][slot["id"]] = {
+                    "time": "", "status": "off", "method": "",
+                    "raw_status": "", "image_ref": "", "image_name": "",
+                    "window": _window_text(slot), "reminded": False}
+                continue
             rec = cells.get(slot["id"])
             if rec is None:
                 reminded = (phone, str(slot["id"])) in sent_sessions
@@ -365,7 +394,9 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
                 member["checkin"][slot["id"]] = cell
                 slot_done += 1
                 slot_seen += 1
-        if slot_seen and slot_done == slot_seen:
+        if not scheduled["checkin"]:
+            member["checkin_status"] = "off"
+        elif slot_seen and slot_done == slot_seen:
             # 全部时段都有记录才算整体完成（缺一个时段就是未完成）
             member["checkin_status"] = (
                 "backfilled"
@@ -388,7 +419,11 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
                 member["checkin_status"] = "pending"
 
         srec = summary_map.get(phone)
-        if srec is not None:
+        if not scheduled["summary"]:
+            # 非执行日：已有记录仍如实展示，但不计入完成
+            member["summary"] = _summary_cell(srec) if srec is not None else None
+            member["summary_status"] = "off"
+        elif srec is not None:
             member["summary"] = _summary_cell(srec)
             member["summary_status"] = ("backfilled"
                                         if str(srec.get("entry_source"))
@@ -404,7 +439,10 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
                 overdue=summary_over)
 
         rrec = report_map.get(phone)
-        if rrec is not None:
+        if not scheduled["report"]:
+            member["report"] = _report_cell(rrec) if rrec is not None else None
+            member["report_status"] = "off"
+        elif rrec is not None:
             member["report"] = _report_cell(rrec)
             member["report_status"] = ("backfilled"
                                        if str(rrec.get("entry_source"))
@@ -430,6 +468,7 @@ def build_board(state: StateStore, backend: Backend, group_id: str,
                   "status": status, "switches": switches},
         "slots": slots,
         "members": members,
+        "scheduled": scheduled,
         "counts": {"members": len(members),
                    "total": enabled_total or len(members),
                    "checkin_done": checkin_done,
@@ -455,7 +494,8 @@ def _today() -> str:
     return _now().date().isoformat()
 
 
-def _achieve(member: dict, switches: dict, slots: list) -> str:
+def _achieve(member: dict, switches: dict, slots: list,
+             scheduled: Optional[dict] = None) -> str:
     """全天综合达标判定：只算已开启业务。
 
     ⭐ D31 修复 4（2026-10-21）：**暂停考核**的成员不按「未打卡」记账 ——
@@ -464,18 +504,22 @@ def _achieve(member: dict, switches: dict, slots: list) -> str:
     - 已暂停考核 + 各项都提交了 -> 仍判「今日达标」（记录真实完成情况）
     - 已暂停考核 + 有缺项     -> **「已暂停考核」**（⛔ 不列缺项）
     """
+    sched = scheduled or {"checkin": True, "summary": True, "report": True}
     pending = []
-    if switches.get("checkin", True):
+    if switches.get("checkin", True) and sched.get("checkin", True):
         for slot in slots:
             cell = (member.get("checkin") or {}).get(slot["id"]) or {}
             if not cell.get("time"):
                 pending.append("%s未打卡" % slot["name"])
-    if switches.get("summary", True) and not member.get("summary"):
+    if (switches.get("summary", True) and sched.get("summary", True)
+            and not member.get("summary")):
         pending.append("总结未提交")
-    if switches.get("report", True) and not member.get("report"):
+    if (switches.get("report", True) and sched.get("report", True)
+            and not member.get("report")):
         pending.append("报数未提交")
     if not pending:
-        return "今日达标"
+        # 三个业务今天都不执行 -> 不是「达标」，是「休息」
+        return "今日达标" if any(sched.values()) else "今日休息"
     if member.get("enabled") is False:
         return "已暂停考核"
     return "、".join(pending)
@@ -511,7 +555,7 @@ def board_rows(board: dict) -> tuple:
                 label = "未完成（%s）" % (cell.get("window") or "未到时段")
             else:
                 label = STATUS_TEXT.get(status, "未完成")
-            row.append(time_text or "未打卡")
+            row.append(time_text or ("—" if status == "off" else "未打卡"))
             row.append(label)
 
         summary = member.get("summary")
@@ -538,7 +582,7 @@ def board_rows(board: dict) -> tuple:
             row.append("")
             row.append("")
 
-        row.append(_achieve(member, switches, slots))
+        row.append(_achieve(member, switches, slots, board.get("scheduled")))
         rows.append(row)
     return headers, rows
 

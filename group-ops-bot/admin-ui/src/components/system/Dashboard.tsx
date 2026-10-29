@@ -87,6 +87,9 @@ function avatarColor(key: string): string {
 export const Dashboard: React.FC = () => {
   const { groups, selectedGroupId, selectGroup } = useApp();
   const [board, setBoard] = useState<Board | null>(null);
+  // ⭐ D50（2026-10-29 用户口径「没业务就没有应交」）：非执行日不算未完成
+  const scheduled = board?.scheduled
+    || { checkin: true, summary: true, report: true };
   const [fields, setFields] = useState<ReportField[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -169,12 +172,14 @@ export const Dashboard: React.FC = () => {
   const overallDone = useCallback(
     (member: BoardMember) => {
       const checkinOk =
-        !switches.checkin || slots.every((slot) => member.checkin[slot.id]?.time);
-      const summaryOk = !switches.summary || !!member.summary;
-      const reportOk = !switches.report || !!member.report;
+        !switches.checkin || !scheduled.checkin
+        || slots.every((slot) => member.checkin[slot.id]?.time);
+      const summaryOk = !switches.summary || !scheduled.summary || !!member.summary;
+      const reportOk = !switches.report || !scheduled.report || !!member.report;
       return checkinOk && summaryOk && reportOk;
     },
-    [slots, switches.checkin, switches.summary, switches.report],
+    [slots, switches.checkin, switches.summary, switches.report,
+     scheduled.checkin, scheduled.summary, scheduled.report],
   );
 
   // ⭐ 2026-10-20（P1-A）：已暂停考核（enabled === false）的成员不进
@@ -272,6 +277,17 @@ export const Dashboard: React.FC = () => {
     rawStatus?: string,
     window?: string,
   ) => {
+    // ⭐ D50：非执行日 —— 今天没有这项业务，不是「未完成」
+    if (status === 'off') {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 text-[11px] font-medium select-none"
+          title="该业务今天不执行（见群配置里的执行日）"
+        >
+          <span>休息</span>
+        </span>
+      );
+    }
     if (status === 'completed') {
       // 迟到补卡仍算达标，但标签如实区分（⛔ 不把 LATE 说成正常完成）
       const late = rawStatus === 'LATE';

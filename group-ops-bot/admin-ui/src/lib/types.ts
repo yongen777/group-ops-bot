@@ -108,7 +108,9 @@ export type CellStatus =
   | 'overdue'
   | 'pending'
   | 'waiting'
-  | 'reminded';
+  | 'reminded'
+  /** ⭐ D50：非执行日（该业务今天不执行，不算未完成） */
+  | 'off';
 
 export interface CheckinCell {
   time: string;
@@ -172,6 +174,8 @@ export interface Board {
     switches: GroupConfig['switches'];
   };
   slots: CheckinSlot[];
+  /** ⭐ D50：三业务当天是否执行（false = 休息日，不计未完成） */
+  scheduled?: { checkin: boolean; summary: boolean; report: boolean };
   members: BoardMember[];
   counts: {
     members: number;

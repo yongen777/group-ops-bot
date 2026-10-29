@@ -1426,6 +1426,12 @@ def create_admin_router(*, state: StateStore, backend: Backend,
                 raise HTTPException(status_code=400,
                                     detail="日期格式不正确，请选择有效日期")
             board = board_mod.build_board(state, backend, group_id, date)
+            # ⭐ D50（2026-10-29）：三个业务当天都不执行 -> 没有可导的东西
+            sched = board.get("scheduled") or {}
+            if sched and not any(sched.values()):
+                raise HTTPException(
+                    status_code=400,
+                    detail="所选日期不在本群任何业务的执行日（见群配置），无可导出数据")
             if any(board.get("unknown", {}).values()):
                 # ⛔ 不出半张空表冒充成功：查不到就明确说稍后重试
                 raise HTTPException(status_code=503,
@@ -1450,6 +1456,13 @@ def create_admin_router(*, state: StateStore, backend: Backend,
         except ValueError:
             raise HTTPException(status_code=400,
                                 detail="日期格式不正确，请选择有效日期")
+        # ⭐ D50：非执行日⛔ 不产出「全员未提交」的浅红表
+        if not stats_mod.period_scheduled(state, group_id, biz, period_k):
+            labels = {"checkin": "打卡", "summary": "总结", "report": "报数"}
+            raise HTTPException(
+                status_code=400,
+                detail="所选日期不在本群%s的执行日（见群配置），无可导出数据"
+                       % labels[biz])
         try:
             records = stats_mod.query_records(backend, biz, group_id,
                                               period_k)
