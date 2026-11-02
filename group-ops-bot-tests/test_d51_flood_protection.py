@@ -1,88 +1,99 @@
 # -*- coding: utf-8 -*-
-"""D51（2026-11-02 用户报障）：凌晨被机器人刷屏的兜底保护。
+"""D51 v2（2026-11-02 用户指令）：同一条消息只处理一次。
 
-事故
-----
-2026-10-31（周六）03:09-04:13，云中台群被机器人连发 60 条回复
-（「今天不是本群打卡日…」+「未识别该指令」），而正常一整天只有 7~9 条。
+用户口径
+--------
+「一天如果是用户在晚上或者 @ 触发机器人回复一对一的，这就是正确实现的效果。
+**不是一对一这种才是问题**。」所以：
+- ⛔ 不做夜间静默（晚上有人在用就是正常需求）
+- ⛔ 不做总量限流（一对一多少条都由用户决定）
+- ✅ 只修「同一条消息被重复处理」
 
-查明
+铁证
 ----
-- 平台**只回推 @ 了机器人的消息**（用户 09:00 实测：不 @ 的消息平台不推，
-  我们零日志）。所以不是「机器人不判 @」。
-- 载荷没有消息 ID / 时间戳（2026-10-19 探针：`textMsg{content, tenantId}`），
-  **无法按消息去重** —— 平台把历史消息重推一遍，我们完全无感。
-- 61 条分散在一小时内（约 1 条/分钟），**每分钟限流挡不住**。
-
-对策
-----
-1. **夜间静默**（主力）：[00:00, 07:00) 一律不回复、不跑业务，只记日志。
-2. **每群每分钟上限 20 条**（白天兜底）：超出的静默 + WARNING。
-   阈值不能太小 —— 早上 08:50 提醒后全群集中打卡，5 条/分钟会误伤。
+2026-10-31 03:09-04:13 该群 60 条回复里，「39 字节」那一种出现 **38 次**，
+而群里只有 **18 人** —— 回复数大于群人数，必然有人被重复回复。
+说明平台把同一条消息重复投递了（载荷无消息 ID / 时间戳，无法按 ID 识别），
+而我们没有按内容幂等。
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.web import server as web
 
-
-class TestQuietHours:
-    def test_inside_window(self):
-        for hour in (0, 1, 3, 6):
-            assert web.in_quiet_hours(datetime(2026, 11, 2, hour, 30)) is True
-
-    def test_boundaries(self):
-        assert web.in_quiet_hours(datetime(2026, 11, 2, 0, 0)) is True
-        assert web.in_quiet_hours(datetime(2026, 11, 2, 7, 0)) is False
-        assert web.in_quiet_hours(datetime(2026, 11, 2, 23, 59)) is False
-
-    def test_incident_window_covered(self):
-        """事发时刻 03:09 必须落在静默窗口内。"""
-        assert web.in_quiet_hours(datetime(2026, 10, 31, 3, 9)) is True
-        assert web.in_quiet_hours(datetime(2026, 10, 31, 4, 13)) is True
-
-    def test_workday_untouched(self):
-        assert web.in_quiet_hours(datetime(2026, 11, 2, 8, 50)) is False
-        assert web.in_quiet_hours(datetime(2026, 11, 2, 17, 30)) is False
+T0 = datetime(2026, 10, 31, 3, 9, 0)
 
 
-class TestReplyRateLimit:
-    def _reset(self):
-        web._REPLY_WINDOW.clear()
+def _reset():
+    web._REPLY_SEEN.clear()
 
-    def test_allows_up_to_limit(self):
-        self._reset()
-        t0 = datetime(2026, 11, 2, 10, 0, 0)
-        for i in range(web.REPLY_RATE_LIMIT_PER_MIN):
-            assert web.reply_rate_ok("G1", t0.replace(second=i)) is True
 
-    def test_blocks_over_limit(self):
-        self._reset()
-        t0 = datetime(2026, 11, 2, 10, 0, 0)
-        for i in range(web.REPLY_RATE_LIMIT_PER_MIN):
-            web.reply_rate_ok("G1", t0.replace(second=i))
-        assert web.reply_rate_ok("G1", t0.replace(second=30)) is False
+class TestDuplicateMessage:
+    def test_first_time_not_duplicate(self):
+        _reset()
+        assert web.is_duplicate_message("G1", "13800000001", "打卡", T0) is False
 
-    def test_window_slides(self):
-        self._reset()
-        t0 = datetime(2026, 11, 2, 10, 0, 0)
-        for i in range(web.REPLY_RATE_LIMIT_PER_MIN):
-            web.reply_rate_ok("G1", t0.replace(second=i))
-        assert web.reply_rate_ok("G1", t0.replace(second=30)) is False
-        # 61 秒后窗口滑空
-        assert web.reply_rate_ok(
-            "G1", datetime(2026, 11, 2, 10, 1, 1)) is True
+    def test_same_message_within_window_is_duplicate(self):
+        """同群同人同文本 10 分钟内再来 -> 判重（这一条恢复一对一）。"""
+        _reset()
+        web.is_duplicate_message("G1", "13800000001", "打卡", T0)
+        # 窗口 2 秒：1 秒内算同一条消息的重投
+        assert web.is_duplicate_message(
+            "G1", "13800000001", "打卡", T0 + timedelta(seconds=1)) is True
 
-    def test_groups_independent(self):
-        self._reset()
-        t0 = datetime(2026, 11, 2, 10, 0, 0)
-        for i in range(web.REPLY_RATE_LIMIT_PER_MIN):
-            web.reply_rate_ok("GA", t0.replace(second=i))
-        assert web.reply_rate_ok("GA", t0.replace(second=30)) is False
-        assert web.reply_rate_ok("GB", t0.replace(second=31)) is True
+    def test_after_window_allowed_again(self):
+        """超过窗口允许再次处理（用户隔一阵又发一次是正常需求）。"""
+        _reset()
+        web.is_duplicate_message("G1", "13800000001", "打卡", T0)
+        assert web.is_duplicate_message(
+            "G1", "13800000001", "打卡",
+            T0 + timedelta(seconds=web.IDEMPOTENT_WINDOW_SECONDS + 1)) is False
 
-    def test_limit_is_not_too_tight_for_morning_rush(self):
-        """阈值必须明显大于「早上集中打卡」的量（旧值 5 会误伤）。"""
-        assert web.REPLY_RATE_LIMIT_PER_MIN >= 15
+    def test_different_phone_not_duplicate(self):
+        """不同的人发同样的话 -> 各回各的（⛔ 不能互相吃掉）。"""
+        _reset()
+        web.is_duplicate_message("G1", "13800000001", "打卡", T0)
+        assert web.is_duplicate_message(
+            "G1", "13800000002", "打卡", T0) is False
+
+    def test_different_text_not_duplicate(self):
+        _reset()
+        web.is_duplicate_message("G1", "13800000001", "打卡", T0)
+        assert web.is_duplicate_message(
+            "G1", "13800000001", "总结", T0) is False
+
+    def test_different_group_not_duplicate(self):
+        _reset()
+        web.is_duplicate_message("G1", "13800000001", "打卡", T0)
+        assert web.is_duplicate_message(
+            "G2", "13800000001", "打卡", T0) is False
+
+    def test_whitespace_normalized(self):
+        _reset()
+        web.is_duplicate_message("G1", "13800000001", "打卡", T0)
+        assert web.is_duplicate_message(
+            "G1", "13800000001", "  打卡  ", T0) is True
+
+    def test_missing_phone_never_blocked(self):
+        """拿不到手机号时⛔ 不能判重（否则会把正常消息吞掉）。"""
+        _reset()
+        assert web.is_duplicate_message("G1", "", "打卡", T0) is False
+        assert web.is_duplicate_message("", "13800000001", "打卡", T0) is False
+
+    def test_night_time_is_not_special(self):
+        """⛔ 夜间不再有特殊处理：凌晨与白天行为完全一致。"""
+        _reset()
+        assert web.is_duplicate_message(
+            "G1", "13800000001", "打卡", T0) is False
+        assert web.is_duplicate_message(
+            "G1", "13800000002", "打卡", datetime(2026, 10, 31, 14, 30)) is False
+
+    def test_quiet_hours_and_rate_limit_removed(self):
+        """⛔ 夜间静默 / 每分钟限流已按用户指令彻底移除。"""
+        assert not hasattr(web, "in_quiet_hours")
+        assert not hasattr(web, "reply_rate_ok")
+        assert not hasattr(web, "REPLY_RATE_LIMIT_PER_MIN")
+        assert not hasattr(web, "QUIET_START_HOUR")
+        assert not hasattr(web, "_REPLY_WINDOW")

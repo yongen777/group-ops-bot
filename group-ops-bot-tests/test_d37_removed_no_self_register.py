@@ -50,6 +50,12 @@ class TestRemovedCannotSelfRegister:
 
         tmp_db.upsert_member_task(GROUP, PHONE, nickname="郑佳")
         tmp_db.clear_member_removed(GROUP, PHONE)
+        # D51: 回调入口对「同一条消息」2 秒内只处理一次；这里模拟时间流逝。
+        from app.web import server as _web
+        _web._REPLY_SEEN.clear()
+        # D51: 回调入口对「同一条消息」2 秒内只处理一次；这里模拟时间流逝。
+        from app.web import server as _web
+        _web._REPLY_SEEN.clear()
         backend.results["user_get"] = {"user": None}
         _say(client, "实名")
         assert _last(sender) == realname_handler.ASK_TEXT

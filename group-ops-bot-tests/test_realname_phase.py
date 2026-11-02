@@ -253,6 +253,12 @@ class TestPausedMember:
         client.post("/api/callback", json=callback_payload("打卡"))
         assert sender.sent[-1]["text"] == base_handler.PAUSED_MEMBER_TEXT
         # 恢复考核后同一句命令正常发链接
+        # D51: 回调入口对「同一条消息」2 秒内只处理一次；这里模拟时间流逝。
+        from app.web import server as _web
+        _web._REPLY_SEEN.clear()
+        # D51: 回调入口对「同一条消息」2 秒内只处理一次；这里模拟时间流逝。
+        from app.web import server as _web
+        _web._REPLY_SEEN.clear()
         tmp_db.upsert_member_task(GROUP, PHONE, nickname="张三",
                                   role="开发", enabled=True)
         resp = client.post("/api/callback", json=callback_payload("打卡"))

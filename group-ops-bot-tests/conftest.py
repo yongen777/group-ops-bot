@@ -28,17 +28,14 @@ def tmp_db(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _reset_reply_rate_window():
-    """D51：回调入口有「每群每分钟 20 条回复」的限流（挡刷屏）。
+    """D51：回调入口有「同一条消息 10 分钟内只处理一次」的幂等表。
 
-    ⚠️ 它的窗口是**模块级内存**，同一进程里所有测试共用一个窗口 ——
-    不清理的话，跑到第 21 个用例就会被误拦（实测打挂 77 个）。
-    这里每个测试前后各清一次，让限流逻辑只在专门用例里被测。
+    ⚠️ 它是**模块级内存**，同一进程里所有测试共用 —— 不清理的话，
+    后续用例发同样的命令会被判成重复而静默（实测打挂 77 个）。
+    这里每个测试前后各清一次。
     """
-    try:
-        from app.web import server as _web
+    from app.web import server as _web
 
-        _web._REPLY_WINDOW.clear()
-        yield
-        _web._REPLY_WINDOW.clear()
-    except Exception:  # pragma: no cover - 导入失败不影响其它测试
-        yield
+    _web._REPLY_SEEN.clear()
+    yield
+    _web._REPLY_SEEN.clear()

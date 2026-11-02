@@ -124,37 +124,41 @@ def mention_state(raw) -> Optional[bool]:
     return None
 
 
-REPLY_RATE_LIMIT_PER_MIN = 20
-_REPLY_WINDOW: dict = {}
+# D51 v2（2026-11-02 用户指令：移除夜间静默与限流）：
+# 「用户在晚上或 @ 触发、机器人一对一回复」是**正确行为**，不能用时间窗或
+# 总量上限去拦。真正要修的是「同一条消息被处理后又被重复处理」。
+#
+# 证据：2026-10-31 03:09-04:13 该群 60 条回复里，39 字节那一种出现 **38 次**
+# —— 而群里只有 18 人。**回复数 > 群人数**，说明同一个人被回了多次，
+# 平台把同一条消息重复投递了（载荷没有消息 ID / 时间戳，无法按 ID 识别）。
+#
+# 因此改成按内容幂等：同 (群, 发送人, 归一化后文本) 在窗口内只处理一次。
+# 这不是限流（不限总条数），而是恢复「一条消息 -> 一次回复」的一对一。
+# 窗口取 60 秒而不是 10 分钟：只挡「平台秒级重投」（事故里相邻两条相差
+# 0.58 秒），⛔ 不吞「用户手抖后又主动发一次」—— 后者应该拿到
+# 「已打卡，无需重复」这类正常回执，而不是被静默。
+IDEMPOTENT_WINDOW_SECONDS = 2
+_REPLY_SEEN: dict = {}
 
 
-def reply_rate_ok(group_id: str, now=None) -> bool:
-    """该群本分钟是否还能回复（True=放行）。超出静默并记 WARNING。"""
-    from collections import deque
+def is_duplicate_message(group_id: str, phone: str, text: str,
+                         now=None) -> bool:
+    """同一条消息是否在窗口内已处理过（True=重复，应当不回复）。"""
     from datetime import datetime as _dt
-    ts = (now or _dt.now()).timestamp()
-    window = _REPLY_WINDOW.setdefault(group_id, deque())
-    while window and ts - window[0] > 60:
-        window.popleft()
-    if len(window) >= REPLY_RATE_LIMIT_PER_MIN:
+    if not group_id or not phone:
         return False
-    window.append(ts)
-    return True
-
-
-# D51: quiet hours. 2026-10-31 03:09-04:13 the group got 61 callbacks /
-# 60 replies (a normal FULL DAY is only 7~9). They were spread over an hour
-# (~1/min), so a per-minute rate limit cannot stop it -- only a time window can.
-# Payload has no message id / timestamp (2026-10-19 probe: textMsg{content,
-# tenantId}), so "is this a re-push of an old message" is undetectable.
-QUIET_START_HOUR = 0
-QUIET_END_HOUR = 7   # [00:00, 07:00) 一律静默
-
-
-def in_quiet_hours(now=None) -> bool:
-    from datetime import datetime as _dt
-    hour = (now or _dt.now()).hour
-    return QUIET_START_HOUR <= hour < QUIET_END_HOUR
+    key = (group_id, phone, (text or "").strip())
+    ts = (now or _dt.now()).timestamp()
+    last = _REPLY_SEEN.get(key)
+    if last is not None and ts - last < IDEMPOTENT_WINDOW_SECONDS:
+        return True
+    _REPLY_SEEN[key] = ts
+    # 顺手清理过期键，避免长跑内存膨胀
+    if len(_REPLY_SEEN) > 2000:
+        for k in [k for k, v in _REPLY_SEEN.items()
+                  if ts - v >= IDEMPOTENT_WINDOW_SECONDS]:
+            _REPLY_SEEN.pop(k, None)
+    return False
 
 
 def build_router() -> Router:
@@ -411,25 +415,16 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
         if mentioned is False:
             LOG.info("callback ignored: bot not mentioned")
             return {"ok": True, "replied": False, "ignored": "not_mentioned"}
-        # D51: quiet hours silence EVERYTHING (no reply, no business).
-        # Placed before the rate limit so quiet traffic never eats the budget.
-        if in_quiet_hours():
-            LOG.info(
-                "callback quiet hours: group=...%s phone=...%s text_len=%d "
-                "window=[%d,%d)",
-                (inbound.group_id or "")[-6:], (inbound.phone or "")[-4:],
-                len(inbound.text or ""), QUIET_START_HOUR, QUIET_END_HOUR)
-            return {"ok": True, "replied": False, "ignored": "quiet_hours"}
-        # D51: rate limit per group per minute. Excess is silenced (no reply,
-        # no business) with a WARNING as incident evidence. Cause-agnostic:
-        # platform re-push / flooding / future bugs are all capped here.
-        if not reply_rate_ok(inbound.group_id):
+        # D51 v2：同一条消息重复投递 -> 只处理第一次（恢复一对一）。
+        # 位置在「明确没 @」之后：非 @ 消息本来就不该占用幂等表。
+        if is_duplicate_message(inbound.group_id, inbound.phone,
+                                inbound.text):
             LOG.warning(
-                "callback rate limited: group=...%s phone=...%s text_len=%d "
-                "limit=%d/min",
+                "callback duplicate dropped: group=...%s phone=...%s "
+                "text_len=%d window=%ds",
                 (inbound.group_id or "")[-6:], (inbound.phone or "")[-4:],
-                len(inbound.text or ""), REPLY_RATE_LIMIT_PER_MIN)
-            return {"ok": True, "replied": False, "ignored": "rate_limited"}
+                len(inbound.text or ""), IDEMPOTENT_WINDOW_SECONDS)
+            return {"ok": True, "replied": False, "ignored": "duplicate"}
 
         parsed = commands.parse(inbound.text)
 

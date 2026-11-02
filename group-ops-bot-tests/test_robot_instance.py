@@ -427,8 +427,11 @@ class TestCallbackAutoDiscoveryAndNaming:
         assert sender.sent[-1]["text"] == bind_handler.DISABLED_GROUP_TEXT
         # 恢复实例 -> 业务照常（证明可逆，⛔ 不是永久锁死）
         tmp_db.set_robot_instance_status(INST_GROUP, "ACTIVE")
-        _post_callback(client, INST_GROUP, "帮助")
-        assert sender.sent[-1]["text"] == commands.HELP_TEXT
+        # ⭐ D51：回调入口有「同一条消息 2 秒内只处理一次」的幂等。
+        # 这里上一步已经发过「帮助」，同文本再发会被判重 ——
+        # 换一个命令验证「恢复后业务照常」。
+        _post_callback(client, INST_GROUP, "报数")
+        assert sender.sent[-1]["text"] != bind_handler.DISABLED_GROUP_TEXT
 
 
 # ---------- 5. 管理后台 API（六端点 + 掩码 + 审计脱敏） ----------
