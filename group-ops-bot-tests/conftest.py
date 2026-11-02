@@ -24,3 +24,21 @@ def tmp_db(tmp_path):
     store = StateStore(tmp_path / "test_state.db")
     yield store
     store.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_reply_rate_window():
+    """D51：回调入口有「每群每分钟 20 条回复」的限流（挡刷屏）。
+
+    ⚠️ 它的窗口是**模块级内存**，同一进程里所有测试共用一个窗口 ——
+    不清理的话，跑到第 21 个用例就会被误拦（实测打挂 77 个）。
+    这里每个测试前后各清一次，让限流逻辑只在专门用例里被测。
+    """
+    try:
+        from app.web import server as _web
+
+        _web._REPLY_WINDOW.clear()
+        yield
+        _web._REPLY_WINDOW.clear()
+    except Exception:  # pragma: no cover - 导入失败不影响其它测试
+        yield

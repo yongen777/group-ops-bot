@@ -124,6 +124,39 @@ def mention_state(raw) -> Optional[bool]:
     return None
 
 
+REPLY_RATE_LIMIT_PER_MIN = 20
+_REPLY_WINDOW: dict = {}
+
+
+def reply_rate_ok(group_id: str, now=None) -> bool:
+    """该群本分钟是否还能回复（True=放行）。超出静默并记 WARNING。"""
+    from collections import deque
+    from datetime import datetime as _dt
+    ts = (now or _dt.now()).timestamp()
+    window = _REPLY_WINDOW.setdefault(group_id, deque())
+    while window and ts - window[0] > 60:
+        window.popleft()
+    if len(window) >= REPLY_RATE_LIMIT_PER_MIN:
+        return False
+    window.append(ts)
+    return True
+
+
+# D51: quiet hours. 2026-10-31 03:09-04:13 the group got 61 callbacks /
+# 60 replies (a normal FULL DAY is only 7~9). They were spread over an hour
+# (~1/min), so a per-minute rate limit cannot stop it -- only a time window can.
+# Payload has no message id / timestamp (2026-10-19 probe: textMsg{content,
+# tenantId}), so "is this a re-push of an old message" is undetectable.
+QUIET_START_HOUR = 0
+QUIET_END_HOUR = 7   # [00:00, 07:00) 一律静默
+
+
+def in_quiet_hours(now=None) -> bool:
+    from datetime import datetime as _dt
+    hour = (now or _dt.now()).hour
+    return QUIET_START_HOUR <= hour < QUIET_END_HOUR
+
+
 def build_router() -> Router:
     """装配四个入口命令的处理器（§4.1：固定路由，无动态路由）。"""
     router = Router()
@@ -346,9 +379,57 @@ def create_app(*, state: StateStore, backend: Backend, sender: ReplySender,
         # ⚠️ 载荷没有 @ 字段时 mention_state 返回 None -> **放行**
         #    （2026-10-19 实测平台载荷无 @ 字段，⛔ 不能拿不存在的字段拦截）
         mentioned = mention_state(inbound.raw)
+        # ⭐ D51（2026-11-02 用户报障：凌晨群里被机器人刷屏）只观测不拦截。
+        # 现状：平台载荷**没有** @ 字段（2026-10-19 实测），`mention_state` 恒为
+        # None -> 放行 -> 群里任何消息都会被当成命令处理并回复。
+        # 2026-10-31 03:09-04:13 就有 61 条回调、60 条回复（平时全天只有 7~9 条）。
+        # 这里只记录「原始文本里有没有 @ 痕迹」，用于判断能否改成严格 @ 判定。
+        # ⛔ 不打正文（群里消息涉隐私），只打长度 / 是否有 @ / 是否以 @ 开头 /
+        #    载荷键名 / 群尾号。
+        try:
+            _raw = inbound.raw if isinstance(inbound.raw, dict) else {}
+            _box = _raw.get("textMsg")
+            _raw_text = ""
+            if isinstance(_box, dict):
+                _raw_text = _box.get("content") or ""
+            if not _raw_text:
+                _raw_text = _raw.get("text") or ""
+            LOG.info(
+                "inbound_probe group=...%s phone=...%s norm_len=%d "
+                "raw_len=%d raw_has_at=%s raw_starts_at=%s mention=%s "
+                "payload_keys=%s",
+                (inbound.group_id or "")[-6:],
+                (inbound.phone or "")[-4:],
+                len(inbound.text or ""),
+                len(_raw_text),
+                "@" in _raw_text,
+                _raw_text.startswith("@"),
+                mentioned,
+                sorted(_raw.keys()))
+        except Exception:  # pragma: no cover - 探针绝不影响主流程
+            pass
         if mentioned is False:
             LOG.info("callback ignored: bot not mentioned")
             return {"ok": True, "replied": False, "ignored": "not_mentioned"}
+        # D51: quiet hours silence EVERYTHING (no reply, no business).
+        # Placed before the rate limit so quiet traffic never eats the budget.
+        if in_quiet_hours():
+            LOG.info(
+                "callback quiet hours: group=...%s phone=...%s text_len=%d "
+                "window=[%d,%d)",
+                (inbound.group_id or "")[-6:], (inbound.phone or "")[-4:],
+                len(inbound.text or ""), QUIET_START_HOUR, QUIET_END_HOUR)
+            return {"ok": True, "replied": False, "ignored": "quiet_hours"}
+        # D51: rate limit per group per minute. Excess is silenced (no reply,
+        # no business) with a WARNING as incident evidence. Cause-agnostic:
+        # platform re-push / flooding / future bugs are all capped here.
+        if not reply_rate_ok(inbound.group_id):
+            LOG.warning(
+                "callback rate limited: group=...%s phone=...%s text_len=%d "
+                "limit=%d/min",
+                (inbound.group_id or "")[-6:], (inbound.phone or "")[-4:],
+                len(inbound.text or ""), REPLY_RATE_LIMIT_PER_MIN)
+            return {"ok": True, "replied": False, "ignored": "rate_limited"}
 
         parsed = commands.parse(inbound.text)
 
